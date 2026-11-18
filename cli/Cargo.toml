@@ -1,0 +1,41 @@
+[package]
+name = "substrate"
+description = "The Substrate relay: pairs this computer, keeps a connection to substrate.gliph.sh, and hands approved messages to your agents in Herdr."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "substrate"
+path = "src/main.rs"
+
+[lib]
+name = "substrate_cli"
+path = "src/lib.rs"
+
+[dependencies]
+substrate-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+chrono.workspace = true
+clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+substrate-proto.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

@@ -1,0 +1,42 @@
+# Substrate on Pushleft (org empire, project substrate). Deploy from the repo
+# root: `pl --org empire up --production` (CI does the same on main).
+# DATABASE_URL comes from data.postgres; S3_*/AWS_* from the `files` bucket
+# (`pl storage bucket create files --production --set-secret`).
+version: 1
+project: substrate
+production:
+  regions: [fsn1]
+  health: /healthz
+roles:
+  web:
+    kind: web
+    port: 8080
+    health: /healthz
+    replicas: 1
+    env:
+      PUBLIC_URL: https://substrate.gliph.sh
+      GLIPH_URL: https://gliph.sh
+      SES_REGION: eu-west-1
+      MAIL_FROM: Substrate <noreply@gliph.sh>
+      RUST_LOG: info,sqlx=warn
+    secrets:
+      - { name: SUBSTRATE_SECRET, as: env }
+      - { name: GLIPH_PLUGIN_TOKEN, as: env }
+      - { name: SES_KEY_ID, as: env }
+      - { name: SES_SECRET, as: env }
+      - { name: S3_ENDPOINT, as: env }
+      - { name: S3_BUCKET, as: env }
+      - { name: AWS_REGION, as: env }
+      - { name: AWS_ACCESS_KEY_ID, as: env }
+      - { name: AWS_SECRET_ACCESS_KEY, as: env }
+    databases: [substrate]
+    resources: { cpu: 0.5, memory: 512MiB }
+    route:
+      domains: [substrate.gliph.sh]
+      # MCP long-polls (wait_for_update) answer within 25 s; uploads are small.
+      timeout: 300
+      min_tls: "1.3"
+data:
+  postgres:
+    plan: dev
+    databases: [{ name: substrate }]

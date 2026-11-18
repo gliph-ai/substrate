@@ -1,0 +1,1376 @@
+//! The website: landing, sign-in, dashboard, projects, conversations,
+//! invites, pairing, consent, uploads and the audit log. Server-rendered with
+//! maud (every interpolation is escaped); app.js only refreshes and copies.
+
+use std::convert::Infallible;
+use std::time::Duration as StdDuration;
+
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::{header, HeaderMap};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::Form;
+use chrono::{DateTime, Duration, Utc};
+use futures_util::stream::Stream;
+use maud::{html, Markup, DOCTYPE};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::app::{audit, hash, id, now, token, App, AppInner, Fail};
+use crate::auth::{check_csrf, session, Account, User};
+use crate::domain::{self, Attachment, Event, Message, Project};
+use crate::oauth::AuthorizeQ;
+use crate::relay::{agent_label, set_mode};
+
+// ---- pieces ----
+
+pub fn agent_logo(kind: &str) -> Option<&'static str> {
+    match kind.to_ascii_lowercase().as_str() {
+        "claude" | "claude code" => Some("claude"),
+        "codex" | "openai" => Some("openai"),
+        "gemini" | "gemini cli" => Some("gemini"),
+        "cursor" => Some("cursor"),
+        "copilot" => Some("copilot"),
+        _ => None,
+    }
+}
+
+/// The logo of the assistant a tester used, from its OAuth client name.
+pub fn client_logo(client: &str) -> Option<&'static str> {
+    let c = client.to_ascii_lowercase();
+    if c.contains("claude") || c.contains("anthropic") {
+        Some("claude")
+    } else if c.contains("chatgpt") || c.contains("openai") || c.contains("codex") {
+        Some("openai")
+    } else if c.contains("gemini") || c.contains("google") {
+        Some("gemini")
+    } else if c.contains("cursor") {
+        Some("cursor")
+    } else if c.contains("copilot") || c.contains("vscode") || c.contains("visual studio") {
+        Some("copilot")
+    } else {
+        None
+    }
+}
+
+fn logo(name: Option<&str>, alt: &str) -> Markup {
+    html! { @if let Some(n) = name { img.logo src=(format!("/static/logos/{n}.svg")) alt=(alt) width="18" height="18"; } }
+}
+
+fn orb(class: &str) -> Markup {
+    html! { span class=(format!("orb {class}")) aria-hidden="true" {} }
+}
+
+fn initials(s: &str) -> String {
+    let i: String = s.split(|c: char| c.is_whitespace() || c == '.' || c == '@').filter(|w| !w.is_empty()).take(2)
+        .filter_map(|w| w.chars().next()).collect::<String>().to_uppercase();
+    if i.is_empty() { "?".into() } else { i }
+}
+
+fn hhmm(t: &DateTime<Utc>) -> String {
+    t.format("%H:%M").to_string()
+}
+
+fn ago(t: &DateTime<Utc>) -> String {
+    let s = (now() - *t).num_seconds().max(0);
+    match s {
+        0..=59 => "now".into(),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=86399 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86400),
+    }
+}
+
+fn stage_tag(stage: &str) -> Markup {
+    let (cls, label) = match stage {
+        "pending_approval" => ("warn", "waiting for approval"),
+        "held" => ("bad", "held"),
+        "approved" => ("", "queued"),
+        "dispatched" | "accepted" => ("", "with the relay"),
+        "submitted" | "working" => ("ok", "agent working"),
+        "awaiting_sender" => ("warn", "question for the tester"),
+        "answered" => ("", "answered"),
+        "completed" => ("ok", "done"),
+        "rejected" => ("", "declined"),
+        "expired" => ("", "expired"),
+        "cancelled" => ("", "cancelled"),
+        "uncertain" => ("bad", "unconfirmed"),
+        "failed" => ("bad", "failed"),
+        "interrupted" => ("bad", "interrupted"),
+        s => ("", s),
+    };
+    html! { span class=(format!("tag {cls}")) { (label) } }
+}
+
+fn state_dot(state: &str) -> &'static str {
+    match state {
+        "idle" | "done" => "ok",
+        "working" => "blue",
+        "blocked" | "needs_rebind" => "warn",
+        "offline" | "unbound" => "",
+        _ => "",
+    }
+}
+
+fn state_label(state: &str) -> &'static str {
+    match state {
+        "idle" | "done" => "idle, ready for input",
+        "working" => "working",
+        "blocked" => "waiting at a permission prompt",
+        "needs_rebind" => "pane gone: rebind needed",
+        "offline" => "offline",
+        "unbound" => "not bound to a pane",
+        _ => "state unknown",
+    }
+}
+
+pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: Markup) -> Markup {
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { (title) " · Substrate" }
+                meta name="description" content="Give people a direct line to the agents building your software.";
+                link rel="icon" href="/static/favicon.svg" type="image/svg+xml";
+                link rel="preconnect" href="https://fonts.googleapis.com";
+                link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
+                link rel="stylesheet" href="/static/app.css";
+                script src="/static/app.js" defer {}
+            }
+            body data-live=[live] {
+                div.wrap {
+                    header.top {
+                        div.row style="gap:28px" {
+                            a.brand href="/" { (orb("")) "Substrate" }
+                            @if let Some(a) = acct {
+                                nav.links aria-label="Main" {
+                                    a href="/" { "Dashboard" }
+                                    a href="/connect" { "Connect an assistant" }
+                                    a href="/machines" { "Machines" }
+                                    a href="/audit" { "Audit log" }
+                                }
+                                span.sr { (a.email) }
+                            } @else {
+                                nav.links aria-label="Main" {
+                                    a href="/#how" { "How it works" }
+                                    a href="/#connect" { "Connect an assistant" }
+                                    a href="/#cli" { "CLI" }
+                                    a href="/#security" { "Security" }
+                                    a href="https://gliph.sh" { "Gliph" }
+                                }
+                            }
+                        }
+                        div.row {
+                            @if let Some(a) = acct {
+                                span.muted style="font-size:14px" { (a.label()) }
+                                form.inline method="post" action="/logout" { button.btn.small type="submit" { "Sign out" } }
+                            } @else {
+                                a.links href="/login" style="color:var(--muted);text-decoration:none;font-size:14px" { "Log in" }
+                                a.btn.primary.small href="/login" { "Get started" }
+                            }
+                        }
+                    }
+                    main { (body) }
+                    footer.foot {
+                        span { "Substrate is part of " a href="https://gliph.sh" { "gliph.sh" } }
+                        span id="security" { "Approving a message is not giving your agent new permissions." }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn csrf(a: &Account) -> Markup {
+    html! { input type="hidden" name="csrf" value=(a.csrf); }
+}
+
+pub fn error_page(title: &str, msg: &str) -> Html<String> {
+    Html(layout(title, None, None, html! {
+        div.narrow style="padding:64px 0" { div.card { h1 { (title) } p.muted { (msg) } a.btn href="/" { "Back to Substrate" } } }
+    }).into_string())
+}
+
+fn page(app: &AppInner, title: &str, acct: Option<&Account>, body: Markup) -> Html<String> {
+    let _ = app;
+    Html(layout(title, acct, None, body).into_string())
+}
+
+// ---- landing & sign-in ----
+
+pub async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Response, Fail> {
+    match session(&app, &headers).await {
+        Some(a) => dashboard(&app, &a).await.map(IntoResponse::into_response),
+        None => Ok(landing().into_response()),
+    }
+}
+
+fn landing() -> Html<String> {
+    Html(layout("Your agents. Connected.", None, None, html! {
+        section style="padding:56px 0 28px" class="stack" {
+            h1.hero { "Your agents. Connected." br; span.grad { "A direct line to the agents building your software." } }
+            p.lead { "People talk to their own assistant. Their message reaches the Claude Code session you already have open, after you approve it, and the reply finds its way back." }
+            div.between style="padding-top:8px" {
+                div.row {
+                    a.btn.primary href="/login" { "Get started free" }
+                    a.btn href="/auth/gliph" { span style="font-family:Georgia,serif;color:#FF7BA0;font-weight:700" { "g" } "Sign in with Gliph" }
+                }
+                a.muted href="#connect" style="text-decoration:none;font-size:14px" { span style="color:var(--text)" { "New: " } "works inside Gliph channels →" }
+            }
+        }
+        section.stage aria-label="How an approval looks" {
+            div.horizon {}
+            div.inner {
+                (orb("xl"))
+                div.card.glow style="width:100%" {
+                    div.row style="font-size:17px;font-weight:500" { "Needs approval " span.badge { "2" } }
+                    span.muted style="font-size:14px" { "Messages waiting before they reach your agents." }
+                }
+                div.card style="width:100%;box-shadow:0 0 0 1px var(--ring)" {
+                    div.between {
+                        div.row { span.avatar { "SC" } div { div style="font-weight:500" { "Sarah Chen" } div.muted style="font-size:12px" { (logo(Some("claude"), "")) " via Claude → verna" } } }
+                        span.mono style="color:var(--amber);font-size:12px" { "pending approval" }
+                    }
+                    div { "The settings page doesn't save my preferences. Screenshot attached." }
+                }
+            }
+        }
+        section id="connect" class="stack" style="align-items:center;padding:56px 0 16px" {
+            span.muted style="font-size:14px" { "Works with the assistant they already use" }
+            div.row style="gap:36px;justify-content:center;font-size:19px;font-weight:500" {
+                span.row { img.logo.lg src="/static/logos/claude.svg" alt=""; "Claude" }
+                span.row { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" }
+                span.row { img.logo.lg src="/static/logos/gemini.svg" alt=""; "Gemini" }
+                span.row { img.logo.lg src="/static/logos/copilot.svg" alt=""; "Copilot" }
+                span.row { img.logo.lg src="/static/logos/cursor.svg" alt=""; "Cursor" }
+            }
+        }
+        section id="how" class="stack" style="padding:56px 0 16px" {
+            h2 { "From their chat" br; "to your terminal, and back." }
+            div.grid {
+                div.card { span.mono style="color:#8FA8FF;font-size:12px" { "01" } h3 { "They ask their assistant" } span.muted { "Claude, ChatGPT or any MCP client calls Substrate with their words and screenshot." } }
+                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "On the web, with the CLI, or with /substrate approve in a Gliph channel. Or turn on auto relay." } }
+                div.card { span.mono style="color:var(--teal);font-size:12px" { "03" } h3 { "Your agent gets it" } span.muted { "The Rust relay dials out from your Mac and hands it to the Herdr pane already running. No open ports." } }
+                div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "They hear back" } span.muted { "Progress, questions, CI and deploy. Their assistant says when it's ready to retest." } }
+            }
+        }
+        section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
+            div.card {
+                h3 { "Connect an assistant" }
+                div.code { "https://substrate.gliph.sh/mcp" }
+                span.muted { "Add it as a custom connector in Claude and sign in once. In ChatGPT, developer mode creates it as an app." }
+            }
+            div.card {
+                h3 { "Install the relay " span.muted style="font-weight:400" { "· Rust, macOS" } }
+                div.code { "$ curl -fsSL https://substrate.gliph.sh/install | sh\n$ substrate login\n$ substrate project add verna --pane w9P:p1\n$ substrate daemon install" }
+            }
+        }
+    }).into_string())
+}
+
+#[derive(Deserialize)]
+pub struct NextQ {
+    #[serde(default)]
+    next: String,
+}
+
+pub async fn login_get(State(app): State<App>, headers: HeaderMap, Query(q): Query<NextQ>) -> Response {
+    if session(&app, &headers).await.is_some() {
+        return Redirect::to(&crate::auth::safe_next(&q.next)).into_response();
+    }
+    login_page(&app, &q.next, None).into_response()
+}
+
+pub fn login_page(_app: &AppInner, next: &str, err: Option<&str>) -> Html<String> {
+    let next = crate::auth::safe_next(next);
+    Html(layout("Sign in", None, None, html! {
+        div.page-horizon {}
+        div.narrow style="padding:48px 0 160px" class="stack" {
+            div style="display:flex;justify-content:center;padding:12px 0 24px" { (orb("xl")) }
+            h1 style="text-align:center" { "Sign in to " span.grad { "Substrate" } }
+            div.card {
+                @if let Some(e) = err { div.flash.bad role="alert" { (e) } }
+                form method="post" action="/login" class="stack" {
+                    input type="hidden" name="next" value=(next);
+                    div.field { label for="email" { "Email" } input id="email" type="email" name="email" required autocomplete="email" placeholder="you@company.com"; }
+                    button.btn.primary type="submit" { "Send sign-in link" }
+                }
+                div.row.muted style="justify-content:center;font-size:14px" { "or" }
+                a.btn href=(format!("/auth/gliph?next={}", urlencoding::encode(&next))) { span style="font-family:Georgia,serif;color:#FF7BA0;font-weight:700" { "g" } "Sign in with Gliph" }
+            }
+            p.faint style="text-align:center;font-size:13px" { "No password. We email you a link that works once." }
+        }
+    }).into_string())
+}
+
+pub fn check_email_page(email: &str) -> Html<String> {
+    Html(layout("Check your email", None, None, html! {
+        div.narrow style="padding:64px 0" class="stack" {
+            div style="display:flex;justify-content:center" { (orb("xl")) }
+            div.card { h1 { "Check your email" } p.muted { "We sent a sign-in link to " strong { (email) } ". It works once and expires in 15 minutes." } }
+        }
+    }).into_string())
+}
+
+pub fn magic_confirm_page(t: &str) -> Html<String> {
+    Html(layout("Finish signing in", None, None, html! {
+        div.narrow style="padding:64px 0" class="stack" {
+            div.card {
+                h1 { "Finish signing in" }
+                p.muted { "Press the button to sign in to Substrate in this browser." }
+                form method="post" action="/auth/magic" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { "Sign in" } }
+            }
+        }
+    }).into_string())
+}
+
+// ---- dashboard ----
+
+async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
+    let owned = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
+    let testing: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT p.id, p.name, acc.email FROM members m JOIN projects p ON p.id=m.project_id JOIN accounts acc ON acc.id=p.owner_id WHERE m.account_id=$1 AND m.role='tester' ORDER BY p.name",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    let approvals = sqlx::query_as::<_, Message>(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.order_n",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    let recent = sqlx::query_as::<_, Message>(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 ORDER BY m.updated_at DESC LIMIT 12",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    let machines: Vec<(String, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT id, name, last_seen FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    let hour = (now() + Duration::hours(0)).format("%H").to_string().parse::<u32>().unwrap_or(12);
+    let greet = match hour { 5..=11 => "Good morning,", 12..=17 => "Good afternoon,", _ => "Good evening," };
+    let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage='completed'").bind(&a.id).fetch_one(&app.db).await?;
+
+    Ok(page(app, "Dashboard", Some(a), html! {
+        div.stack style="padding:12px 0 48px" {
+            div.between style="padding:8px 4px 12px" {
+                div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
+                div.row { a.btn href="/connect" { "Connect an assistant" } }
+            }
+            @if !approvals.is_empty() {
+                div.card.glow {
+                    div.row style="font-size:19px;font-weight:500" { "Needs approval " span.badge { (approvals.len()) } }
+                    div.list style="padding:0;background:transparent" {
+                        @for m in &approvals {
+                            a.item href=(format!("/c/{}", m.conversation_id)) {
+                                span.l { span class=(format!("dot {}", if m.stage == "held" { "bad" } else { "warn" })) {} span { (truncate(&m.text, 90)) } @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } } }
+                                span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) (m.client_name) " · " (ago(&m.created_at)) }
+                            }
+                        }
+                    }
+                }
+            }
+            div.grid.tight {
+                div.card.stat { span.k { "Projects" } span.big { (owned.len()) } }
+                div.card.stat { span.k { "Machines online" } span.v { (machines.iter().filter(|m| app.machine_online(&m.0)).count()) " of " (machines.len()) } }
+                div.card.stat { span.k { "Waiting" } span.v style="color:var(--amber)" { (approvals.len()) } }
+                div.card.stat { span.k { "Completed" } span.big.grad { (completed) } }
+            }
+            @if owned.is_empty() {
+                div.card {
+                    h3 { "Set up your first project" }
+                    p.muted { "Install the relay on the Mac where your agent runs, sign it in, and bind a Herdr pane." }
+                    div.code { "$ curl -fsSL " (app.cfg.public_url) "/install | sh\n$ substrate login\n$ substrate herdr discover\n$ substrate project add <handle> --pane <pane-id>\n$ substrate daemon install" }
+                }
+            }
+            div.split {
+                div.main.stack {
+                    @if !owned.is_empty() {
+                        div.list {
+                            div.label { "Your projects" }
+                            @for p in &owned {
+                                a.item href=(format!("/p/{}", p.id)) {
+                                    span.l { span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } }
+                                    span.r { (state_label(&p.state)) " · " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
+                                }
+                            }
+                        }
+                    }
+                    @if !recent.is_empty() {
+                        div.list {
+                            div.label { "Recent" }
+                            @for m in &recent {
+                                a.item href=(format!("/c/{}", m.conversation_id)) {
+                                    span.l { (stage_tag(&m.stage)) span { (truncate(&m.text, 70)) } }
+                                    span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (ago(&m.updated_at)) }
+                                }
+                            }
+                        }
+                    }
+                }
+                div.side.stack {
+                    @if !testing.is_empty() {
+                        div.list {
+                            div.label { "Projects you test" }
+                            @for (pid, name, owner) in &testing { a.item href=(format!("/p/{pid}")) { span.l { (name) } span.r { (owner) } } }
+                        }
+                    }
+                    div.list {
+                        div.label { "Machines" }
+                        @if machines.is_empty() { div.item { span.muted { "None yet. Run " span.mono { "substrate login" } } } }
+                        @for (mid, name, seen) in &machines {
+                            a.item href="/machines" {
+                                span.l { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} (name) }
+                                span.r { @if app.machine_online(mid) { "online" } @else if let Some(s) = seen { "seen " (ago(s)) " ago" } @else { "never connected" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }))
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    let one = s.replace('\n', " ");
+    if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
+}
+
+// ---- project ----
+
+pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path<String>, Query(f): Query<FlashQ>) -> Result<Response, Fail> {
+    domain::role(&app, &pid, &a.id).await?.ok_or_else(|| Fail::new(404, "no such project"))?;
+    let p = domain::project(&app, &pid).await?;
+    let owner = p.owner_id == a.id;
+    let convs: Vec<(String, String, DateTime<Utc>, String, String, String, String)> = sqlx::query_as(
+        "SELECT c.id, c.title, c.updated_at, COALESCE(m.stage,''), COALESCE(m.sender_label,''), COALESCE(m.client_name,''), COALESCE(m.deploy_stage,'')
+         FROM conversations c LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=c.id ORDER BY order_n DESC LIMIT 1) m ON true
+         WHERE c.project_id=$1 AND ($2 OR c.sender_id=$3) ORDER BY c.updated_at DESC LIMIT 50",
+    ).bind(&pid).bind(owner).bind(&a.id).fetch_all(&app.db).await?;
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&pid).fetch_one(&app.db).await?;
+    let held: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='held'").bind(&pid).fetch_one(&app.db).await?;
+    let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='completed'").bind(&pid).fetch_one(&app.db).await?;
+    let deploying: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND deploy_stage IN ('fix_committed','ci_running','ci_passed','deploying')").bind(&pid).fetch_one(&app.db).await?;
+    let members: Vec<(String, String, String, String, bool)> = sqlx::query_as(
+        "SELECT a.id, a.email, a.name, m.role, m.trusted_auto FROM members m JOIN accounts a ON a.id=m.account_id WHERE m.project_id=$1 ORDER BY m.role, a.email",
+    ).bind(&pid).fetch_all(&app.db).await?;
+    let invites: Vec<(String, String, i32, i32, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, label, uses, max_uses, expires_at FROM invites WHERE project_id=$1 AND NOT revoked AND expires_at > now() AND uses < max_uses ORDER BY created_at DESC",
+    ).bind(&pid).fetch_all(&app.db).await?;
+    let machine: Option<String> = sqlx::query_scalar("SELECT name FROM machines WHERE id=$1").bind(&p.machine_id).fetch_optional(&app.db).await?;
+    let online = app.machine_online(&p.machine_id);
+    let owner_name = domain::account_label(&app, &p.owner_id).await;
+
+    Ok(Html(layout(&p.name, Some(&a), Some(format!("/p/{pid}/live")), html! {
+        div.stack style="padding:12px 0 48px" {
+            @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
+            @if let Some(secret) = &f.invite {
+                div.card.glow {
+                    h3 { "Invitation link" }
+                    p.muted { "Send this to your tester. It is shown once; Substrate keeps only a hash." }
+                    div.secret { (format!("{}/i/{}", app.cfg.public_url, secret)) }
+                    div.row { button.btn.small type="button" data-copy=(format!("{}/i/{}", app.cfg.public_url, secret)) { "Copy link" } }
+                }
+            }
+            div.between style="padding:8px 4px" {
+                div {
+                    h1 { (p.name) }
+                    div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "—" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
+                }
+                @if owner {
+                    div.row { a.btn href="#invite" { "Invite a tester" } }
+                }
+            }
+            @if owner && pending > 0 {
+                div.card.glow {
+                    div.between {
+                        div { div.row style="font-size:19px;font-weight:500" { "Needs approval " span.badge { (pending) } } @if held > 0 { div.muted style="font-size:14px" { (held) " held by a risk flag." } } }
+                        a.btn.primary href="#conversations" { "Review" }
+                    }
+                }
+            }
+            @if p.state == "needs_rebind" && owner {
+                div.card.attention {
+                    h3 { "The agent's pane is gone" }
+                    p style="color:#E4D9C4;margin:0" { "Herdr pane " span.mono { (p.pane_id) } " closed or now runs a different session. Messages stay queued; nothing goes to whatever replaced it. Bind the project to its new pane:" }
+                    div.code { "$ substrate herdr discover\n$ substrate project bind " (p.handle) " <pane-id>" }
+                }
+            }
+            div.grid.tight {
+                div.card.stat { span.k { "Agent" } span.v style=(format!("color:{}", if matches!(p.state.as_str(), "idle"|"done") { "var(--teal)" } else { "var(--text)" })) { (state_label(&p.state)) } }
+                div.card.stat { span.k { "Connection" } span.v { @if online { "Online" } @else { "Offline" } } span.faint style="font-size:12px" { (machine.clone().unwrap_or_else(|| "no machine".into())) } }
+                div.card.stat { span.k { "Deploying" } span.v { (logo(Some("github-actions"), "")) " " (deploying) } }
+                div.card.stat { span.k { "Completed" } span.big.grad { (completed) } }
+            }
+            @if owner {
+                div.split {
+                    div.main {
+                        @if p.auto_active() {
+                            section.card.attention {
+                                div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
+                                div style="font-size:26px;font-weight:500;letter-spacing:-.02em" { "Auto relay is on" }
+                                p style="color:#E4D9C4;margin:0" { "Incoming messages are forwarded without manual approval. Flagged messages still wait for you, and your agent's own permission prompts stay on." }
+                                form method="post" action=(format!("/p/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { "Turn off auto relay" } }
+                            }
+                        } @else {
+                            section.card {
+                                div.between { h3 { "Relay mode: approval required" } span.tag { "default" } }
+                                p.muted style="margin:0" { "Every message waits for you. Auto relay forwards messages without approval: it does not give your agent any new permissions, and flagged messages still wait." }
+                                form method="post" action=(format!("/p/{pid}/mode")) class="row" data-confirm="Turn on auto relay? Messages from testers will reach your agent without your approval." {
+                                    (csrf(&a)) input type="hidden" name="mode" value="auto";
+                                    label.sr for="minutes" { "For how long" }
+                                    select id="minutes" name="minutes" style="width:auto" { option value="60" { "for 1 hour" } option value="480" selected { "for 8 hours" } option value="0" { "until I turn it off" } }
+                                    input type="hidden" name="confirm" value="yes";
+                                    button.btn type="submit" { "Turn on auto relay" }
+                                }
+                            }
+                        }
+                    }
+                    div.side {
+                        section.card {
+                            h3 { "Collaborators" }
+                            div.stack {
+                                @for (aid, email, name, role, trusted) in &members {
+                                    div.between {
+                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { (role) @if *trusted { " · may auto relay" } } } }
+                                        @if role != "owner" {
+                                            div.row {
+                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { @if *trusted { "Untrust" } @else { "Trust" } } }
+                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { "Remove" } }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            span.faint style="font-size:12px" { "Trusted testers' messages skip approval. The ring shows who." }
+                        }
+                    }
+                }
+            }
+            section id="conversations" class="list" {
+                div.label { "Conversations" }
+                @if convs.is_empty() { div.item { span.muted { "Nothing yet." } } }
+                @for (cid, title, upd, stage, from, client, dep) in &convs {
+                    a.item href=(format!("/c/{cid}")) {
+                        span.l { (stage_tag(stage)) span { (truncate(title, 80)) } @if !dep.is_empty() { span.tag.ok { (dep.replace('_', " ")) } } }
+                        span.r { (from) " · " (logo(client_logo(client), "")) (client) " · " (ago(upd)) }
+                    }
+                }
+            }
+            @if owner {
+                div.split {
+                    section.main.card id="invite" {
+                        h3 { "Invite a tester" }
+                        p.muted style="margin:0" { "They get access to this project only: send messages and screenshots, read replies. They can't change bindings, modes or anything on your machine." }
+                        form method="post" action=(format!("/p/{pid}/invites")) class="grid" style="align-items:end" {
+                            (csrf(&a))
+                            div.field { label for="label" { "Who is it for" } input id="label" type="text" name="label" placeholder="Sarah" maxlength="64"; }
+                            div.field { label for="days" { "Expires" } select id="days" name="days" { option value="1" { "in 1 day" } option value="7" { "in 7 days" } option value="14" selected { "in 14 days" } option value="30" { "in 30 days" } } }
+                            div.field { label for="uses" { "Uses" } select id="uses" name="max_uses" { option value="1" selected { "one person" } option value="5" { "up to 5 people" } option value="25" { "up to 25 people" } } }
+                            button.btn.primary type="submit" { "Create link" }
+                        }
+                        @if !invites.is_empty() {
+                            div.stack {
+                                @for (iid, label, uses, max, exp) in &invites {
+                                    div.inset.between {
+                                        span { (if label.is_empty() { "invitation" } else { label }) span.faint style="font-size:13px" { " · " (uses) "/" (max) " used · expires " (exp.format("%b %d")) } }
+                                        form.inline method="post" action=(format!("/p/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { "Revoke" } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    section.side.card {
+                        h3 { "Settings" }
+                        form method="post" action=(format!("/p/{pid}/settings")) class="stack" {
+                            (csrf(&a))
+                            div.field { label for="name" { "Name" } input id="name" type="text" name="name" value=(p.name) maxlength="64"; }
+                            div.field { label for="desc" { "What testers see" } textarea id="desc" name="description" maxlength="500" { (p.description) } }
+                            div.field { label for="hosts" { "Retest URLs testers may be sent to (hosts, comma-separated)" } input id="hosts" type="text" name="retest_hosts" value=(p.retest_hosts) placeholder="verna.app, staging.verna.app"; }
+                            label.row style="color:var(--text-2);font-size:14px" { input type="checkbox" name="ci_public" value="1" checked[p.ci_public]; "Testers may see raw CI links" }
+                            button.btn type="submit" { "Save" }
+                        }
+                        div.inset style="font-size:13px" {
+                            "Gliph channel: "
+                            @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/substrate link " (p.handle) } } }
+                            @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/p/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small type="submit" { "Unlink" } } }
+                        }
+                    }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct FlashQ {
+    #[serde(default)]
+    flash: Option<String>,
+    #[serde(default)]
+    invite: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CsrfOnly {
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+pub struct ModeForm {
+    csrf: String,
+    mode: String,
+    #[serde(default)]
+    minutes: Option<i64>,
+    #[serde(default)]
+    confirm: String,
+}
+
+pub async fn project_mode(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<ModeForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let p = domain::require_owner(&app, &pid, &a.id).await?;
+    if f.mode == "auto" && f.confirm != "yes" {
+        return Err(Fail::new(400, "auto relay needs explicit confirmation"));
+    }
+    set_mode(&app, &a.id, &p, &f.mode, f.minutes.filter(|m| *m > 0), "web").await?;
+    if f.mode == "approve" {
+        domain::pump(&app, &pid).await.ok();
+    }
+    Ok(Redirect::to(&format!("/p/{pid}?flash={}", urlencoding::encode(if f.mode == "auto" { "Auto relay is on." } else { "Auto relay is off. Every message waits for you." }))).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SettingsForm {
+    csrf: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    retest_hosts: String,
+    #[serde(default)]
+    ci_public: Option<String>,
+}
+
+pub async fn project_settings(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<SettingsForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let hosts: Vec<String> = f.retest_hosts.split(',').map(|h| h.trim().trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/').to_ascii_lowercase())
+        .filter(|h| !h.is_empty() && h.len() < 200 && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')).take(10).collect();
+    let name = substrate_proto::sanitize(&f.name, 64);
+    sqlx::query("UPDATE projects SET name=CASE WHEN $2='' THEN name ELSE $2 END, description=$3, retest_hosts=$4, ci_public=$5 WHERE id=$1")
+        .bind(&pid).bind(&name).bind(substrate_proto::sanitize(&f.description, 500)).bind(hosts.join(",")).bind(f.ci_public.is_some())
+        .execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "project.settings", &pid, &format!("retest_hosts={} ci_public={}", hosts.join(","), f.ci_public.is_some())).await;
+    Ok(Redirect::to(&format!("/p/{pid}?flash=Saved.")).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct InviteForm {
+    csrf: String,
+    #[serde(default)]
+    label: String,
+    days: i64,
+    max_uses: i32,
+}
+
+pub async fn invite_create(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<InviteForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let t = token();
+    let iid = id("inv");
+    sqlx::query("INSERT INTO invites (id, project_id, token_hash, label, max_uses, created_by, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+        .bind(&iid).bind(&pid).bind(hash(&t)).bind(substrate_proto::sanitize(&f.label, 64)).bind(f.max_uses.clamp(1, 25))
+        .bind(&a.id).bind(now() + Duration::days(f.days.clamp(1, 30))).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "invite.created", &iid, &f.label).await;
+    Ok(Redirect::to(&format!("/p/{pid}?invite={t}#top")).into_response())
+}
+
+pub async fn invite_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, iid)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    sqlx::query("UPDATE invites SET revoked=true WHERE id=$1 AND project_id=$2").bind(&iid).bind(&pid).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "invite.revoked", &iid, "").await;
+    Ok(Redirect::to(&format!("/p/{pid}?flash=Invitation+revoked.")).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct TrustForm {
+    csrf: String,
+    on: String,
+}
+
+pub async fn member_trust(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, aid)): Path<(String, String)>, Form(f): Form<TrustForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let on = f.on == "1";
+    sqlx::query("UPDATE members SET trusted_auto=$3 WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).bind(on).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), if on { "member.trusted" } else { "member.untrusted" }, &aid, "").await;
+    Ok(Redirect::to(&format!("/p/{pid}")).into_response())
+}
+
+pub async fn member_remove(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, aid)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    sqlx::query("DELETE FROM members WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "member.removed", &aid, "").await;
+    Ok(Redirect::to(&format!("/p/{pid}?flash=Tester+removed.")).into_response())
+}
+
+pub async fn unlink_gliph(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    sqlx::query("UPDATE projects SET gliph_channel='' WHERE id=$1").bind(&pid).execute(&app.db).await?;
+    app.gliph(crate::app::GliphOut::Resubscribe);
+    audit(&app, &a.id, &pid, &a.label(), "gliph.unlinked", &pid, "web").await;
+    Ok(Redirect::to(&format!("/p/{pid}?flash=Unlinked+from+Gliph.")).into_response())
+}
+
+pub async fn project_live(State(app): State<App>, User(a): User, Path(pid): Path<String>) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Fail> {
+    domain::role(&app, &pid, &a.id).await?.ok_or_else(|| Fail::new(404, "no such project"))?;
+    let stream = futures_util::stream::unfold((app, pid, String::new()), |(app, pid, last)| async move {
+        loop {
+            tokio::time::sleep(StdDuration::from_secs(4)).await;
+            let sig: Option<String> = sqlx::query_scalar(
+                "SELECT concat(p.state, p.mode, coalesce(max(m.updated_at)::text,'')) FROM projects p LEFT JOIN messages m ON m.project_id=p.id WHERE p.id=$1 GROUP BY p.state, p.mode",
+            ).bind(&pid).fetch_optional(&app.db).await.ok().flatten();
+            let sig = format!("{}{}", sig.unwrap_or_default(), app.machine_online(&domain::project(&app, &pid).await.map(|p| p.machine_id).unwrap_or_default()));
+            if !last.is_empty() && sig != last {
+                return Some((Ok(SseEvent::default().data("changed")), (app, pid, sig)));
+            }
+            if last.is_empty() {
+                return Some((Ok(SseEvent::default().comment("ready")), (app, pid, sig)));
+            }
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+// ---- conversation ----
+
+pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path<String>) -> Result<Response, Fail> {
+    let row: Option<(String, String, String)> = sqlx::query_as("SELECT project_id, sender_id, title FROM conversations WHERE id=$1").bind(&cid).fetch_optional(&app.db).await?;
+    let Some((pid, sender, title)) = row else { return Err(Fail::new(404, "no such conversation")) };
+    let p = domain::project(&app, &pid).await?;
+    let owner = p.owner_id == a.id;
+    if !owner && (sender != a.id || domain::role(&app, &pid, &a.id).await?.is_none()) {
+        return Err(Fail::new(404, "no such conversation"));
+    }
+    let events = sqlx::query_as::<_, Event>("SELECT * FROM events WHERE conversation_id=$1 ORDER BY seq").bind(&cid).fetch_all(&app.db).await?;
+    let msgs = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE conversation_id=$1 ORDER BY order_n").bind(&cid).fetch_all(&app.db).await?;
+    let atts = sqlx::query_as::<_, Attachment>("SELECT * FROM attachments WHERE conversation_id=$1 ORDER BY created_at").bind(&cid).fetch_all(&app.db).await?;
+    let machine: Option<String> = sqlx::query_scalar("SELECT name FROM machines WHERE id=$1").bind(&p.machine_id).fetch_optional(&app.db).await?;
+    let online = app.machine_online(&p.machine_id);
+    let latest = msgs.last();
+    let own_host = app.cfg.host();
+    let status = match latest { Some(m) => Some(domain::status_block(&app, m, i64::MAX, !owner).await?), None => None };
+
+    Ok(Html(layout(&title, Some(&a), Some(format!("/c/{cid}/live")), html! {
+        div.between style="padding:4px 0 16px" {
+            div.crumbs { a href=(format!("/p/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
+            div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} (machine.clone().unwrap_or_else(|| "no machine".into())) @if online { " online" } @else { " offline" } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
+        }
+        div.split style="padding-bottom:48px" {
+            div.main.stack {
+                @for e in &events {
+                    @if !e.held || owner { (event_card(&app, &a, &p, &msgs, &atts, e, owner, &own_host)) }
+                }
+                @if let Some(m) = latest {
+                    @if m.stage == "awaiting_sender" && !owner {
+                        form.card method="post" action=(format!("/c/{cid}/answer")) {
+                            (csrf(&a))
+                            h3 { "Answer the agent's question" }
+                            label.sr for="answer" { "Your answer" }
+                            textarea id="answer" name="text" required maxlength="8000" {}
+                            div.row { button.btn.primary type="submit" { "Send answer" } }
+                        }
+                    }
+                }
+            }
+            div.side.stack {
+                @if let Some(s) = &status {
+                    div.card {
+                        span.muted style="font-size:13px" { @if owner { "What the tester's assistant sees" } @else { "Status" } }
+                        dl.kv.mono style="font-size:12.5px" {
+                            dt { "stage" } dd { (s["stage"].as_str().unwrap_or("")) }
+                            @if let Some(d) = s["deployment_stage"].as_str() { dt { "deployment" } dd { (d) } }
+                            dt { "next_action" } dd style="color:var(--amber)" { (s["next_action"].as_str().unwrap_or("")) }
+                        }
+                        div.inset { (s["summary"].as_str().unwrap_or("")) }
+                    }
+                }
+                div.card {
+                    span.muted style="font-size:13px" { "Route" }
+                    dl.kv {
+                        dt { "Project" } dd { (p.name) }
+                        dt { "Machine" } dd { (machine.unwrap_or_else(|| "none".into())) }
+                        dt { "Pane" } dd.mono { (if p.pane_id.is_empty() { "—".to_string() } else { p.pane_id.clone() }) }
+                        dt { "Agent" } dd { (logo(agent_logo(&p.agent), "")) " " (agent_label(&p.agent)) }
+                        @if let Some(m) = msgs.first() { dt { "Sender" } dd { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (m.client_name) } }
+                    }
+                }
+                @if !p.gliph_channel.is_empty() {
+                    div.card { div.row style="font-size:14px" { span style="width:28px;height:28px;border-radius:8px;background:#1A2138;color:#FF7BA0;display:inline-flex;align-items:center;justify-content:center;font-family:Georgia,serif" { "g" } "Mirrored to its Gliph channel" } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts: &[Attachment], e: &Event, owner: bool, own_host: &str) -> Markup {
+    let m = msgs.iter().find(|m| m.id == e.message_id);
+    let my_atts: Vec<&Attachment> = atts.iter().filter(|x| x.message_id == e.message_id && ((e.actor_kind == "human" && x.origin == "tester") || (e.actor_kind == "agent" && x.origin == "agent" && e.data["attachments"].as_array().map(|l| l.iter().any(|v| v.as_str() == Some(&x.id))).unwrap_or(false)))).collect();
+    let text = if e.actor_kind == "agent" || e.actor_kind == "deploy" { if owner { e.text.clone() } else { crate::safety::defang_links(&e.text, own_host, &p.retest_hosts) } } else { e.text.clone() };
+    match e.actor_kind.as_str() {
+        "human" => html! {
+            article.card.ev {
+                div.head {
+                    div.who {
+                        span.avatar { (initials(&e.actor_name)) @if let Some(m) = m { (logo(client_logo(&m.client_name), "")) } }
+                        div { div style="font-weight:500" { (e.actor_name) span.role { " · " @if m.map(|m| m.sender_id == p.owner_id).unwrap_or(false) { "developer" } @else { "tester" } } }
+                              @if let Some(m) = m { @if !m.client_name.is_empty() { div.role { "written by their assistant, " (m.client_name) } } } }
+                    }
+                    span.time { (hhmm(&e.created_at)) }
+                }
+                div.body style="font-size:16px" { (text) }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (x.size / 1024) " KB · " (x.mime) } } } } }
+            }
+        },
+        "system" => {
+            let stage = e.data["stage"].as_str().unwrap_or("");
+            let open = m.map(|m| m.stage == stage).unwrap_or(false);
+            let attention = owner && open && (stage == "pending_approval" || stage == "held");
+            html! {
+                article class=(if attention { "card ev attention" } else { "card ev" }) {
+                    div.head { span.who { span style="font-weight:500" { "Substrate" } @if !stage.is_empty() { (stage_tag(stage)) } } span.time { (hhmm(&e.created_at)) } }
+                    div.body style="color:var(--text-2)" { (text) }
+                    @if attention { @if let Some(m) = m {
+                        @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
+                        p.muted style="margin:0;font-size:14px" { "This is exactly what your agent will receive:" }
+                        div.envelope { (envelope_markup(&m.envelope)) }
+                        div.row {
+                            form.inline method="post" action=(format!("/m/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { "Approve" } }
+                            form.inline method="post" action=(format!("/m/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { "Reject" } }
+                        }
+                    } }
+                    @if owner && open { @if let Some(m) = m {
+                        @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/m/{}/cancel", m.id)) { (csrf(a)) button.btn.small type="submit" { "Cancel delivery" } } }
+                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? If the agent already received it, it will see it twice." { (csrf(a)) button.btn.small type="submit" { "Deliver again" } } }
+                    } }
+                }
+            }
+        }
+        "relay" => {
+            let stage = e.data["stage"].as_str().unwrap_or("");
+            html! {
+                article.card.ev {
+                    div.head { span.who { span style="font-weight:500" { "Local relay" } span.role.mono { (p.pane_id) } } span.time { (hhmm(&e.created_at)) } }
+                    div.row { span class=(format!("tag {}", if matches!(stage, "uncertain" | "failed") { "bad" } else { "ok" })) { (text) } }
+                    @if owner && stage == "working" { @if let Some(m) = m { @if m.agent_idle && !m.excerpt.is_empty() {
+                        details { summary { "Terminal excerpt (only you see this)" } div.code style="margin-top:8px" { (m.excerpt) } }
+                    } } }
+                }
+            }
+        }
+        "agent" => html! {
+            article class=(if e.held { "card ev danger" } else { "card ev" }) {
+                div.head {
+                    span.who { (logo(agent_logo(&p.agent), "")) span style="font-weight:500" { (e.actor_name) } span.role { "agent · " (match e.kind.as_str() { "final" => "final reply", "question" => "question for the tester", "progress" => "progress", _ => "reply" }) } }
+                    span.time { (hhmm(&e.created_at)) }
+                }
+                @if e.held {
+                    div.tag.bad { "Held: looks like it contains " (e.data["secret_hits"].as_array().map(|v| v.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default()) ". The tester can't see it." }
+                }
+                div.body { (text) }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) } } } }
+                @if e.held && owner {
+                    form method="post" action=(format!("/c/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this reply to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { "Release to tester" } }
+                }
+            }
+        },
+        "deploy" => {
+            let d = &e.data["deploy"];
+            let st = d["stage"].as_str().unwrap_or("");
+            let order = ["fix_committed", "ci_running", "ci_passed", "deploying", "deployed", "verified", "ready_to_retest"];
+            let at = order.iter().position(|s| *s == st);
+            let failed = matches!(st, "ci_failed" | "deploy_failed" | "unknown");
+            let ci = d["ci_url"].as_str().unwrap_or("");
+            let verify = d["verify_url"].as_str().unwrap_or("");
+            let gitlab = ci.contains("gitlab");
+            html! {
+                article.card.ev id="deploy" {
+                    div.head { span.who { (logo(Some(if gitlab { "gitlab" } else { "github-actions" }), "")) span style="font-weight:500" { "CI and deploy" } span.role { "watched by the relay" } } span.time { (hhmm(&e.created_at)) } }
+                    div.body { (text) }
+                    @if !failed { div.deploy {
+                        @for (i, s) in order.iter().enumerate() {
+                            @if at.map(|a| i <= a).unwrap_or(false) { div class=(if *s == "ready_to_retest" { "on" } else { "" }) { span style=(if *s == "ready_to_retest" { "" } else { "color:var(--teal)" }) { "✓ " (s.replace('_', " ")) } } }
+                        }
+                    } } @else { div.tag.bad { (st.replace('_', " ")) } }
+                    div.row style="font-size:14px" {
+                        @if !ci.is_empty() && (owner || p.ci_public) { a href=(ci) rel="noopener noreferrer" target="_blank" { "CI run" } }
+                        @if !verify.is_empty() && crate::safety::host_allowed(verify, own_host, &p.retest_hosts) { a href=(verify) rel="noopener noreferrer" target="_blank" { (verify) } }
+                        @else if !verify.is_empty() && owner { span.faint { (verify) " (not on the retest allowlist; testers don't get this link)" } }
+                    }
+                }
+            }
+        }
+        _ => html! {},
+    }
+}
+
+/// The envelope with the untrusted block highlighted and the attachment folder
+/// placeholder shown in words.
+fn envelope_markup(env: &str) -> Markup {
+    let env = env.replace(substrate_proto::ATTACH_DIR, "<attachment folder>");
+    let start = env.find("<<<UNTRUSTED");
+    let end = env.rfind("\nUNTRUSTED ");
+    match (start, end) {
+        (Some(s), Some(e)) if e > s => {
+            let open_end = env[s..].find('\n').map(|i| s + i + 1).unwrap_or(s);
+            html! { (env[..open_end].to_string()) span.untrusted { (env[open_end..e].to_string()) } (env[e..].to_string()) }
+        }
+        _ => html! { (env) },
+    }
+}
+
+pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let m = domain::decide(&app, &a.id, &mid, &action).await?;
+    Ok(Redirect::to(&format!("/c/{}", m.conversation_id)).into_response())
+}
+
+pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): User, Path((cid, seq)): Path<(String, i64)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let pid: String = sqlx::query_scalar("SELECT project_id FROM conversations WHERE id=$1").bind(&cid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such conversation"))?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let e = sqlx::query_as::<_, Event>("UPDATE events SET held=false WHERE conversation_id=$1 AND seq=$2 AND held RETURNING *").bind(&cid).bind(seq).fetch_optional(&app.db).await?;
+    if let Some(e) = e {
+        audit(&app, &a.id, &pid, &a.label(), "reply.released", &e.message_id, &seq.to_string()).await;
+        app.wake(&cid, seq);
+    }
+    Ok(Redirect::to(&format!("/c/{cid}")).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct AnswerForm {
+    csrf: String,
+    text: String,
+}
+
+pub async fn answer(State(app): State<App>, headers: HeaderMap, User(a): User, Path(cid): Path<String>, Form(f): Form<AnswerForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let m = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE conversation_id=$1 AND stage='awaiting_sender' ORDER BY order_n DESC LIMIT 1")
+        .bind(&cid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(409, "the agent is not waiting for an answer"))?;
+    if m.sender_id != a.id {
+        return Err(Fail::new(403, "only the person the question was for can answer it"));
+    }
+    domain::set_stage(&app, &m.id, "answered").await?;
+    domain::create_message(&app, domain::NewMessage {
+        project_id: &m.project_id, sender_id: &a.id, sender_label: "", client_name: "Substrate web", conversation_id: Some(&cid),
+        kind: "answer", text: &f.text, idem_key: "", attachment_ids: &[],
+    }).await?;
+    Ok(Redirect::to(&format!("/c/{cid}")).into_response())
+}
+
+pub async fn conversation_live(State(app): State<App>, User(a): User, Path(cid): Path<String>) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Fail> {
+    let row: Option<(String, String)> = sqlx::query_as("SELECT project_id, sender_id FROM conversations WHERE id=$1").bind(&cid).fetch_optional(&app.db).await?;
+    let Some((pid, sender)) = row else { return Err(Fail::new(404, "no such conversation")) };
+    let p = domain::project(&app, &pid).await?;
+    if p.owner_id != a.id && sender != a.id {
+        return Err(Fail::new(404, "no such conversation"));
+    }
+    let rx = app.waiter(&cid);
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(seq) => Some((Ok(SseEvent::default().data(seq.to_string())), rx)),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Some((Ok(SseEvent::default().data("lag")), rx)),
+            Err(_) => None,
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+// ---- files ----
+
+pub fn signed_file_url(app: &AppInner, att: &str, account: &str) -> String {
+    let exp = (now() + Duration::hours(1)).timestamp();
+    let sig = app.sign(&format!("file:{att}:{account}:{exp}"));
+    format!("{}/files/{att}?u={account}&exp={exp}&sig={sig}", app.cfg.public_url)
+}
+
+#[derive(Deserialize)]
+pub struct FileQ {
+    u: String,
+    exp: i64,
+    sig: String,
+}
+
+async fn serve_attachment(app: &AppInner, att: &Attachment) -> Result<Response, Fail> {
+    let bytes = app.files.get(&format!("attachments/{}", att.id)).await?.ok_or_else(|| Fail::new(404, "gone"))?;
+    let inline = att.mime.starts_with("image/");
+    Ok((
+        [
+            (header::CONTENT_TYPE, if att.mime.starts_with("text/") { "text/plain; charset=utf-8".to_string() } else { att.mime.clone() }),
+            (header::CONTENT_DISPOSITION, format!("{}; filename=\"{}\"", if inline { "inline" } else { "attachment" }, att.name)),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+            (header::CONTENT_SECURITY_POLICY, "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox".into()),
+            (header::CACHE_CONTROL, "private, max-age=300".into()),
+        ],
+        bytes,
+    ).into_response())
+}
+
+pub async fn file_signed(State(app): State<App>, Path(aid): Path<String>, Query(q): Query<FileQ>) -> Result<Response, Fail> {
+    if q.exp < now().timestamp() || !app.verify(&format!("file:{aid}:{}:{}", q.u, q.exp), &q.sig) {
+        return Err(Fail::new(403, "this link expired"));
+    }
+    let att = sqlx::query_as::<_, Attachment>("SELECT * FROM attachments WHERE id=$1").bind(&aid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "gone"))?;
+    domain::role(&app, &att.project_id, &q.u).await?.ok_or_else(|| Fail::new(403, "no access"))?;
+    serve_attachment(&app, &att).await
+}
+
+pub async fn file_session(State(app): State<App>, User(a): User, Path(aid): Path<String>) -> Result<Response, Fail> {
+    let att = sqlx::query_as::<_, Attachment>("SELECT * FROM attachments WHERE id=$1").bind(&aid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "gone"))?;
+    let p = domain::project(&app, &att.project_id).await?;
+    let sender: Option<String> = sqlx::query_scalar("SELECT sender_id FROM conversations WHERE id=$1").bind(&att.conversation_id).fetch_optional(&app.db).await?;
+    if p.owner_id != a.id && sender.as_deref() != Some(a.id.as_str()) && att.uploader_id != a.id {
+        return Err(Fail::new(404, "gone"));
+    }
+    serve_attachment(&app, &att).await
+}
+
+// ---- upload links ----
+
+async fn upload_token(app: &AppInner, t: &str) -> Result<(String, String), Fail> {
+    let row: Option<(String, String)> = sqlx::query_as("SELECT account_id, ref FROM tokens WHERE hash=$1 AND kind='upload' AND expires_at > now()")
+        .bind(hash(t)).fetch_optional(&app.db).await?;
+    row.ok_or_else(|| Fail::new(404, "this upload link expired; ask your assistant for a new one"))
+}
+
+pub async fn upload_get(State(app): State<App>, Path(t): Path<String>) -> Result<Response, Fail> {
+    let (account, pid) = upload_token(&app, &t).await?;
+    let p = domain::project(&app, &pid).await?;
+    let done: Vec<String> = sqlx::query_scalar("SELECT name FROM attachments WHERE project_id=$1 AND uploader_id=$2 AND message_id='' AND created_at > now() - interval '1 day'")
+        .bind(&pid).bind(&account).fetch_all(&app.db).await?;
+    Ok(Html(layout("Upload files", None, None, html! {
+        div.narrow style="padding:48px 0" class="stack" {
+            h1 { "Upload files for " span.grad { (p.name) } }
+            p.lead { "Screenshots, PDFs, logs or text files, up to 10 MB each. Then go back to your assistant and say they're uploaded." }
+            form.card method="post" enctype="multipart/form-data" {
+                label for="f" { "Files" }
+                input id="f" type="file" name="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,.md,.log,.txt" required;
+                button.btn.primary type="submit" { "Upload" }
+            }
+            @if !done.is_empty() { div.card { h3 { "Uploaded" } @for n in &done { div.inset { (n) } } } }
+        }
+    }).into_string()).into_response())
+}
+
+pub async fn upload_post(State(app): State<App>, Path(t): Path<String>, mut mp: Multipart) -> Result<Response, Fail> {
+    let (account, pid) = upload_token(&app, &t).await?;
+    let mut n = 0;
+    while let Some(field) = mp.next_field().await.map_err(|_| Fail::new(400, "bad upload"))? {
+        let name = field.file_name().unwrap_or("file").to_string();
+        let bytes = field.bytes().await.map_err(|_| Fail::new(413, "file too large"))?;
+        if bytes.is_empty() {
+            continue;
+        }
+        domain::store_attachment(&app, &pid, &account, "tester", &name, &bytes, "", "").await?;
+        n += 1;
+        if n >= 10 {
+            break;
+        }
+    }
+    Ok(Redirect::to(&format!("/upload/{t}")).into_response())
+}
+
+// ---- invitations ----
+
+async fn invite_by_token(app: &AppInner, t: &str) -> Result<(String, String, String, String, i32, i32, bool, DateTime<Utc>), Fail> {
+    let row: Option<(String, String, String, String, i32, i32, bool, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT i.id, i.project_id, p.name, p.owner_id, i.uses, i.max_uses, i.revoked, i.expires_at FROM invites i JOIN projects p ON p.id=i.project_id WHERE i.token_hash=$1",
+    ).bind(hash(t)).fetch_optional(&app.db).await?;
+    row.ok_or_else(|| Fail::new(404, "this invitation does not exist"))
+}
+
+pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Path<String>) -> Result<Response, Fail> {
+    let (_, pid, name, owner, uses, max, revoked, exp) = invite_by_token(&app, &t).await?;
+    let acct = session(&app, &headers).await;
+    let owner_name = domain::account_label(&app, &owner).await;
+    let p = domain::project(&app, &pid).await?;
+    let dead = revoked || exp < now() || uses >= max;
+    let already = match &acct { Some(a) => domain::role(&app, &pid, &a.id).await?.is_some(), None => false };
+    Ok(Html(layout("Invitation", acct.as_ref(), None, html! {
+        div.page-horizon {}
+        div.narrow style="padding:40px 0 180px" class="stack" {
+            h1 style="font-size:clamp(34px,5vw,46px)" { (owner_name) " invited you to test " span.grad { (name) } "." }
+            @if !p.description.is_empty() { p.lead { (p.description) } }
+            p.lead { "Tell your own AI assistant what you find. It passes your words to the agent building " (name) ", and tells you when a fix is ready to try." }
+            div.row { span.pill { "Send feedback and screenshots" } span.pill { "Read replies" } span.pill { "Expires " (exp.format("%b %d")) } }
+            @if dead {
+                div.card.danger { h3 { "This invitation can't be used" } p.muted { "It expired, was revoked, or has been used. Ask " (owner_name) " for a new one." } }
+            } @else if already {
+                div.card { h3 { "You're in" } p.muted { "You already have access to " (name) "." } a.btn.primary href="/connect" { "Connect your assistant" } }
+            } @else if let Some(a) = &acct {
+                form.card method="post" { (csrf(a)) div.row { span.badge { "1" } h3 { "Accept as " (a.email) } } button.btn.primary type="submit" { "Accept invitation" } }
+            } @else {
+                div.card {
+                    div.row { span.badge { "1" } h3 { "Accept with your email" } }
+                    form method="post" action="/login" class="row" {
+                        input type="hidden" name="next" value=(format!("/i/{t}"));
+                        label.sr for="em" { "Email" }
+                        input id="em" type="email" name="email" required placeholder="you@example.com" style="flex:1 1 240px;width:auto";
+                        button.btn.primary type="submit" { "Send sign-in link" }
+                    }
+                    a href=(format!("/auth/gliph?next=/i/{t}")) style="font-size:14px;color:#BFC8FF;text-decoration:none" { "Already on Gliph? Sign in with Gliph" }
+                }
+            }
+            (assistant_steps(&app))
+            p.faint style="font-size:13px" { "The developer sees your name, your assistant and your message before anything reaches their agent. You can leave at any time." }
+        }
+    }).into_string()).into_response())
+}
+
+fn assistant_steps(app: &AppInner) -> Markup {
+    let url = format!("{}/mcp", app.cfg.public_url);
+    html! {
+        div.card {
+            div.row { span.badge { "2" } h3 { "Add Substrate to your assistant" } }
+            div.grid {
+                div.inset.stack style="box-shadow:0 0 0 1px #D97757" { div.row style="font-weight:500" { img.logo.lg src="/static/logos/claude.svg" alt=""; "Claude" } span.muted style="font-size:13px" { "Settings › Connectors › Add custom connector. Paste the address and sign in. Works on Free (one connector), Pro, Max, Team and Enterprise." } }
+                div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" } span.muted style="font-size:13px" { "Settings › Apps › Advanced settings › Developer mode, then Create app with this address. Developer mode is on Business, Enterprise and Edu (an admin turns it on); some Plus and Pro accounts have it." } }
+                div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/copilot.svg" alt=""; "Other clients" } span.muted style="font-size:13px" { "Claude Code: " span.mono { "claude mcp add --transport http substrate " (url) } ". Others: OAuth, or a personal token from " a href="/connect" { "Connect" } "." } }
+            }
+            div.row { span.code style="flex:1 1 280px" { (url) } button.btn type="button" data-copy=(url) { "Copy" } }
+        }
+        div.card {
+            div.row { span.badge { "3" } h3 { "Say it like you would to a person" } }
+            div.inset style="font-size:16px" { "\u{201c}The settings page doesn't save my dark mode. Here's a screenshot. Can you tell the developer?\u{201d}" }
+            span.muted { "Later, ask \u{201c}Any news on the settings bug?\u{201d} Your assistant checks and tells you when the fix is live." }
+        }
+    }
+}
+
+pub async fn invite_post(State(app): State<App>, headers: HeaderMap, User(a): User, Path(t): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let (iid, pid, name, _, _, _, _, _) = invite_by_token(&app, &t).await?;
+    let n = sqlx::query("UPDATE invites SET uses=uses+1 WHERE id=$1 AND NOT revoked AND expires_at > now() AND uses < max_uses").bind(&iid).execute(&app.db).await?.rows_affected();
+    if n != 1 {
+        return Ok(error_page("Invitation unavailable", "It expired, was revoked, or has been used.").into_response());
+    }
+    sqlx::query("INSERT INTO members (project_id, account_id, role, invite_id) VALUES ($1,$2,'tester',$3) ON CONFLICT DO NOTHING")
+        .bind(&pid).bind(&a.id).bind(&iid).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "invite.accepted", &iid, &name).await;
+    Ok(Redirect::to(&format!("/connect?flash={}", urlencoding::encode(&format!("You can now send messages to {name}.")))).into_response())
+}
+
+// ---- connect (MCP setup, personal tokens) ----
+
+pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<FlashQ>) -> Result<Response, Fail> {
+    let tokens: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as("SELECT hash, ref, expires_at FROM tokens WHERE account_id=$1 AND kind='pat' AND expires_at > now() ORDER BY created_at DESC")
+        .bind(&a.id).fetch_all(&app.db).await?;
+    Ok(Html(layout("Connect an assistant", Some(&a), None, html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
+            h1 { "Connect your " span.grad { "assistant" } }
+            p.lead { "Add Substrate once. Then just tell your assistant what you found." }
+            (assistant_steps(&app))
+            div.card {
+                h3 { "Personal token" }
+                p.muted style="margin:0" { "For clients that can't sign in with OAuth. Send it as " span.mono { "Authorization: Bearer <token>" } ". It expires in 90 days." }
+                @if let Some(t) = &f.invite { div.secret { (t) } div.row { button.btn.small type="button" data-copy=(t) { "Copy token" } span.faint style="font-size:13px" { "Shown once." } } }
+                form method="post" action="/connect/token" class="row" { (csrf(&a)) label.sr for="tl" { "Label" } input id="tl" type="text" name="label" placeholder="Label, e.g. Claude Code on laptop" style="flex:1 1 240px;width:auto" maxlength="64"; button.btn type="submit" { "Create token" } }
+                @for (h, label, exp) in &tokens {
+                    div.inset.between { span { (if label.is_empty() { "token" } else { label }) span.faint { " · expires " (exp.format("%b %d")) } } form.inline method="post" action=(format!("/connect/token/{}/revoke", &h[..16])) { (csrf(&a)) button.btn.small.danger type="submit" { "Revoke" } } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct PatForm {
+    csrf: String,
+    #[serde(default)]
+    label: String,
+}
+
+pub async fn pat_create(State(app): State<App>, headers: HeaderMap, User(a): User, Form(f): Form<PatForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let t = crate::oauth::create_pat(&app, &a.id, &f.label).await?;
+    Ok(Redirect::to(&format!("/connect?invite={t}")).into_response())
+}
+
+pub async fn pat_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path(prefix): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    if prefix.len() == 16 && prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        sqlx::query("DELETE FROM tokens WHERE account_id=$1 AND kind='pat' AND left(hash,16)=$2").bind(&a.id).bind(&prefix).execute(&app.db).await?;
+        audit(&app, &a.id, "", &a.label(), "pat.revoked", &prefix, "").await;
+    }
+    Ok(Redirect::to("/connect?flash=Token+revoked.").into_response())
+}
+
+pub fn consent_page(a: &Account, client: &str, q: &AuthorizeQ, projects: &[(String, String, String)]) -> Html<String> {
+    Html(layout("Allow access", Some(a), None, html! {
+        div.narrow.stack style="padding:32px 0 48px" {
+            div style="display:flex;justify-content:center;gap:18px;align-items:center;padding:12px 0" {
+                @if let Some(l) = client_logo(client) { img src=(format!("/static/logos/{l}.svg")) alt="" width="48" height="48"; }
+                span.faint { "→" }
+                (orb("xl"))
+            }
+            h1 style="text-align:center" { "Allow " (client) " to use Substrate?" }
+            div.card {
+                p style="margin:0" { "Signed in as " strong { (a.email) } ". " (client) " will be able to:" }
+                ul style="margin:0;padding-left:20px;color:var(--text-2)" {
+                    li { "send messages and files to the projects you can test, which the developer approves" }
+                    li { "read the status and replies of your own messages" }
+                }
+                p.muted style="margin:0;font-size:14px" { "It can't change any project, see other people's messages, or reach anyone's computer." }
+                @if projects.is_empty() { div.inset { "You have no projects yet. Open an invitation link first; access follows automatically." } }
+                @else { div.stack { @for (n, h, r) in projects { div.inset.between { span { (n) span.faint.mono { " " (h) } } span.tag { (r) } } } } }
+                form method="post" action="/oauth/authorize" class="row" {
+                    (csrf(a))
+                    @for (k, v) in [("response_type", &q.response_type), ("client_id", &q.client_id), ("redirect_uri", &q.redirect_uri), ("state", &q.state), ("code_challenge", &q.code_challenge), ("code_challenge_method", &q.code_challenge_method), ("scope", &q.scope), ("resource", &q.resource)] {
+                        input type="hidden" name=(k) value=(v);
+                    }
+                    button.btn.primary type="submit" name="decision" value="allow" { "Allow" }
+                    button.btn type="submit" name="decision" value="deny" { "Cancel" }
+                }
+            }
+        }
+    }).into_string())
+}
+
+// ---- pairing ----
+
+#[derive(Deserialize)]
+pub struct PairQ {
+    #[serde(default)]
+    code: String,
+}
+
+pub async fn pair_get(State(app): State<App>, User(a): User, Query(q): Query<PairQ>) -> Result<Response, Fail> {
+    let code = q.code.trim().to_uppercase();
+    let row: Option<(String, String, String)> = sqlx::query_as("SELECT machine_name, platform, status FROM pairings WHERE user_code=$1 AND expires_at > now()")
+        .bind(&code).fetch_optional(&app.db).await?;
+    Ok(Html(layout("Pair a computer", Some(&a), None, html! {
+        div.narrow.stack style="padding:32px 0 48px" {
+            h1 { "Pair a " span.grad { "computer" } }
+            @match row {
+                Some((name, platform, status)) if status == "pending" => {
+                    div.card.glow {
+                        p style="margin:0" { "The relay on " strong { (name) } " (" (platform) ") wants to sign in as " strong { (a.email) } "." }
+                        div.secret style="font-size:22px;text-align:center;letter-spacing:.2em" { (code) }
+                        p.muted style="margin:0" { "Approve only if this code matches the one in your terminal." }
+                        form method="post" class="row" { (csrf(&a)) input type="hidden" name="code" value=(code);
+                            button.btn.primary type="submit" name="decision" value="approve" { "Approve" }
+                            button.btn type="submit" name="decision" value="deny" { "Deny" } }
+                    }
+                }
+                Some(_) => { div.card { p.muted { "This code was already used. Run " span.mono { "substrate login" } " again for a new one." } } }
+                None => {
+                    form.card method="get" { label for="code" { "Code from your terminal" } input id="code" type="text" name="code" placeholder="BCDF-GHJK" autocomplete="off"; button.btn.primary type="submit" { "Continue" } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct PairForm {
+    csrf: String,
+    code: String,
+    decision: String,
+}
+
+pub async fn pair_post(State(app): State<App>, headers: HeaderMap, User(a): User, Form(f): Form<PairForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let status = if f.decision == "approve" { "approved" } else { "denied" };
+    let n = sqlx::query("UPDATE pairings SET status=$2, account_id=$3 WHERE user_code=$1 AND status='pending' AND expires_at > now()")
+        .bind(f.code.trim().to_uppercase()).bind(status).bind(&a.id).execute(&app.db).await?.rows_affected();
+    if n != 1 {
+        return Ok(error_page("Code expired", "Run substrate login again for a new code.").into_response());
+    }
+    audit(&app, &a.id, "", &a.label(), &format!("pairing.{status}"), &f.code, "").await;
+    Ok(Html(layout("Paired", Some(&a), None, html! {
+        div.narrow.stack style="padding:48px 0" { div.card { h1 { @if status == "approved" { "Paired" } @else { "Denied" } } p.muted { @if status == "approved" { "Go back to your terminal; the relay is signing in." } @else { "The relay was refused. Nothing was signed in." } } } }
+    }).into_string()).into_response())
+}
+
+// ---- machines & audit ----
+
+pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
+    let ms: Vec<(String, String, String, String, Option<DateTime<Utc>>, serde_json::Value)> = sqlx::query_as(
+        "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    Ok(Html(layout("Machines", Some(&a), None, html! {
+        div.stack style="padding:12px 0 48px" {
+            h1 { "Machines" }
+            @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } div.code { "$ curl -fsSL " (app.cfg.public_url) "/install | sh\n$ substrate login" } } }
+            @for (mid, name, platform, version, seen, panes) in &ms {
+                div.card {
+                    div.between {
+                        div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
+                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops at once and its projects stop receiving messages." { (csrf(&a)) button.btn.small.danger type="submit" { "Sign out" } }
+                    }
+                    span.muted style="font-size:13px" { @if app.machine_online(mid) { "Online now." } @else if let Some(s) = seen { "Last seen " (ago(s)) " ago." } @else { "Never connected." } }
+                    @if let Some(list) = panes.as_array() { @if !list.is_empty() {
+                        div.list style="padding:0;background:transparent" {
+                            div.label { "Agents in herdr" }
+                            @for pn in list {
+                                div.item {
+                                    span.l { span class=(format!("dot {}", state_dot(pn["status"].as_str().unwrap_or("")))) {} (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span.mono { (pn["pane_id"].as_str().unwrap_or("")) } span { (pn["title"].as_str().unwrap_or("")) } }
+                                    span.r { (pn["status"].as_str().unwrap_or("")) }
+                                }
+                            }
+                        }
+                    } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+pub async fn machine_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    crate::relay::revoke_machine(&app, &a.id, &mid, "signed out from the web").await?;
+    Ok(Redirect::to("/machines").into_response())
+}
+
+pub async fn audit_page(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
+    let rows: Vec<(DateTime<Utc>, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT au.created_at, au.actor, au.action, au.target, au.detail, coalesce(p.name,'') FROM audit au LEFT JOIN projects p ON p.id=au.project_id
+         WHERE au.account_id=$1 OR au.project_id IN (SELECT id FROM projects WHERE owner_id=$1) ORDER BY au.created_at DESC LIMIT 300",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    Ok(Html(layout("Audit log", Some(&a), None, html! {
+        div.stack style="padding:12px 0 48px" {
+            h1 { "Audit log" }
+            p.muted { "Every approval, mode change, binding, invitation, sign-in, hold and release on your projects." }
+            div.scroll-x { table.audit {
+                @for (t, actor, action, target, detail, proj) in &rows {
+                    tr { td.mono.faint style="white-space:nowrap" { (t.format("%b %d %H:%M:%S")) } td { (proj) } td { (actor) } td.mono { (action) } td.mono.faint { (target) } td.faint { (detail) } }
+                }
+            } }
+        }
+    }).into_string()).into_response())
+}
+
+pub async fn healthz(State(app): State<App>) -> Response {
+    match sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&app.db).await {
+        Ok(_) => axum::Json(json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "relays": app.hub.lock().unwrap().len()})).into_response(),
+        Err(_) => (axum::http::StatusCode::SERVICE_UNAVAILABLE, "db").into_response(),
+    }
+}
+
+pub async fn install_sh(State(app): State<App>) -> Response {
+    let s = include_str!("../../cli/install.sh").replace("__SUBSTRATE_URL__", &app.cfg.public_url);
+    ([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], s).into_response()
+}
+
+pub async fn download(State(app): State<App>, Path(rest): Path<String>) -> Result<Response, Fail> {
+    if rest.contains("..") || !rest.chars().all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c)) {
+        return Err(Fail::new(404, "not found"));
+    }
+    let bytes = app.files.get(&format!("downloads/substrate/{rest}")).await?.ok_or_else(|| Fail::new(404, "not found"))?;
+    let ct = if rest.ends_with(".sha256") || rest.ends_with(".json") { "text/plain; charset=utf-8" } else { "application/octet-stream" };
+    Ok(([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, "public, max-age=60")], bytes).into_response())
+}
+
+pub fn not_found() -> Html<String> {
+    error_page("Not found", "There's nothing at this address.")
+}
+

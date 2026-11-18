@@ -1,0 +1,45 @@
+[package]
+name = "substrate-server"
+description = "Substrate cloud: accounts, invites, MCP, approvals, the relay hub and the Gliph plugin."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+substrate-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+rand.workspace = true
+base64.workspace = true
+chrono.workspace = true
+regex.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum = { version = "0.8", features = ["ws", "multipart"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "migrate", "macros"] }
+maud = { version = "0.27", features = ["axum"] }
+url = "2"
+urlencoding = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+base64.workspace = true
+sha2.workspace = true
+url = "2"
+substrate-proto.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+serde_json.workspace = true
+tokio.workspace = true
+axum = "0.8"
+tracing-subscriber.workspace = true
