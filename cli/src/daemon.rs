@@ -316,6 +316,11 @@ impl Relay {
                         self.save(&r);
                         self.send(DaemonFrame::Status { project_id: b.project_id.clone(), state: "blocked".into() });
                     }
+                    Err(PromptError::NotReady) => {
+                        r.state = "received".into();
+                        self.save(&r);
+                        self.send(DaemonFrame::Status { project_id: b.project_id.clone(), state: "unknown".into() });
+                    }
                     Err(PromptError::Gone) => {
                         r.state = "received".into();
                         self.save(&r);

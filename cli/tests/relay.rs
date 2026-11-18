@@ -319,3 +319,12 @@ async fn reconnect_over_a_real_socket() {
     assert!(seen.iter().any(|(r, t)| *r == 1 && t.contains("\"delivery_id\":\"d1\"")), "{seen:?}");
     assert_eq!(h.herdr.prompts().len(), 1);
 }
+
+#[test]
+fn herdr_refusals_are_not_uncertain() {
+    use substrate_cli::herdr::classify;
+    assert!(matches!(classify(r#"{"error":{"code":"agent_blocked","message":"x"}}"#), Err(PromptError::Blocked)));
+    assert!(matches!(classify(r#"{"error":{"code":"agent_not_ready","message":"agent w1:p1 is no longer the pane foreground process"}}"#), Err(PromptError::NotReady)));
+    assert!(matches!(classify(r#"{"error":{"code":"agent_not_found","message":"x"}}"#), Err(PromptError::Gone)));
+    assert!(matches!(classify("socket closed"), Err(PromptError::Other(_))));
+}

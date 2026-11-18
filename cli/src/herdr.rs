@@ -20,6 +20,9 @@ pub trait Herdr: Send + Sync {
 #[derive(Debug)]
 pub enum PromptError {
     Blocked,
+    /// Herdr does not consider the agent ready for input (starting up, or not
+    /// the pane's foreground process). Nothing was written.
+    NotReady,
     Gone,
     Other(String),
 }
@@ -47,6 +50,21 @@ impl Default for Cli {
     }
 }
 
+/// Herdr's error codes (JSON on stderr). `agent_blocked` and
+/// `agent_not_ready` are refusals before any input is written: wait and try
+/// again. `agent_not_found` means the agent left the pane. Anything else is
+/// an unknown outcome.
+pub fn classify(stderr: &str) -> std::result::Result<(), PromptError> {
+    let code = serde_json::from_str::<Value>(stderr.trim()).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string)).unwrap_or_default();
+    match code.as_str() {
+        "agent_blocked" => Err(PromptError::Blocked),
+        "agent_not_ready" => Err(PromptError::NotReady),
+        "agent_not_found" | "pane_not_found" => Err(PromptError::Gone),
+        _ if stderr.contains("agent_blocked") => Err(PromptError::Blocked),
+        _ => Err(PromptError::Other(stderr.trim().chars().take(300).collect())),
+    }
+}
+
 pub fn pane_from(a: &Value) -> Pane {
     Pane {
         pane_id: a["pane_id"].as_str().unwrap_or_default().into(),
@@ -69,14 +87,7 @@ impl Herdr for Cli {
         if out.status.success() {
             return Ok(());
         }
-        let err = String::from_utf8_lossy(&out.stderr).to_string();
-        if err.contains("agent_blocked") {
-            Err(PromptError::Blocked)
-        } else if err.contains("not_found") || err.contains("no agent") || err.contains("unknown target") {
-            Err(PromptError::Gone)
-        } else {
-            Err(PromptError::Other(err.trim().chars().take(300).collect()))
-        }
+        classify(&String::from_utf8_lossy(&out.stderr))
     }
 
     fn read(&self, pane: &str, lines: u32) -> Result<String> {

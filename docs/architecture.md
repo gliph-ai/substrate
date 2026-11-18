@@ -1,17 +1,18 @@
 # Substrate
 
 Substrate lets people reach a developer's running coding agents through their
-own AI assistant. It is a Gliph product: the cloud half lives in the gliph
-server (`server/substrate*.go`), answers on `substrate.gliph.sh` (Host-routed,
-`-substrate-host`), shares gliph's database and files bucket, and mirrors
-projects into Gliph channels. The local half is the `substrate` Rust CLI and
-daemon in `substrate/cli/`.
+own AI assistant. It is a Gliph product, built in Rust: the cloud
+(`server/`, axum + PostgreSQL) runs on `substrate.gliph.sh` as its own Pushleft
+project, and the local relay is the `substrate` CLI and daemon (`cli/`). Both
+compile the same wire contract (`proto/`). Inside Gliph, Substrate is a plugin
+on gliph.sh: it registers `/substrate` at runtime and posts into linked
+channels.
 
 ```
 tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
             │  MCP over HTTPS, OAuth            substrate.gliph.sh/mcp
             ▼
-        Substrate cloud (gliph server) ── mirror ──▶ Gliph channel (#proj-agents)
+        Substrate cloud (Rust)  ── plugin ──▶ Gliph channel (#proj-agents)
             │  approvals, queue, audit, attachments, deploy tracker
             │  WebSocket the daemon dials (no inbound port)   /relay/ws
             ▼
@@ -105,9 +106,10 @@ cloud → daemon:
    `working` → wait (one in flight per project; projects run concurrently).
 3. Download attachments into `<workspace>/<project>/<message_id>/` with the
    given safe names; verify size and sha256; files 0600, no symlinks followed.
-4. Replace the NUL-delimited token `\u001fATTACH_DIR\u001f` in `envelope` with
-   that folder's absolute path. Reject an envelope containing any other C0
-   control character except `\n` and `\t`.
+4. Replace the U+001F-delimited token `\u001fATTACH_DIR\u001f` in `envelope` with
+   that folder's absolute path (`proto::ATTACH_DIR`; the sanitizer strips
+   U+001F from tester text, so it cannot be forged). Reject an envelope
+   containing any other C0 control character except `\n` and `\t`.
 5. Mark the record `submitting`, then `herdr agent prompt <pane_id> <envelope>`
    (no `--wait`; herdr bracketed-pastes and refuses a blocked agent). On success
    mark `submitted`, `ack submitted`; then watch `herdr agent wait` / `get` and
@@ -167,11 +169,15 @@ personal token from the invite page as `Authorization: Bearer sk_sub_…`.
 ## Gliph integration
 
 - **Sign in with Gliph**: `substrate.gliph.sh` sends the browser to gliph.sh's
-  own `/link.html` approval (the device-link flow, `platform=substrate`, its
-  redirect allowed to the configured Substrate callback only). One click on
-  "Approve" and the account is matched by the gliph account's email.
-- **Agent channel**: `/substrate link <project>` in a Gliph channel mirrors that
-  project's conversations into it as `agent` lines (actor `substrate`, the
-  agent's handle, or `deploy`), and `/substrate approve|reject|send|status|mode`
-  act on it from chat. `send` is how a Gliph member, or an agent plugin in the
-  channel, messages the project's agent: agent to agent.
+  own `/link.html` approval (the device-link flow, `platform=substrate`; gliph
+  accepts that redirect only when it equals its `-substrate-callback` flag).
+  One click on "continue"; Substrate redeems the code with PKCE, reads the
+  account's nick and email, signs the minted Gliph session straight out, and
+  matches the Substrate account by email.
+- **Agent channel**: Substrate connects to gliph.sh as the agent plugin
+  `substrate` (`GLIPH_PLUGIN_TOKEN`). `/substrate link <project>` in a channel
+  mirrors that project's conversations into it as `[project]` lines, and
+  `/substrate approve|reject|send|status|mode` act on it from chat. A line
+  `@<project> text` in a linked channel, from a member or another agent plugin,
+  becomes a message to that project's agent (agent to agent); unless its
+  author is the developer, it waits for approval like any tester's.

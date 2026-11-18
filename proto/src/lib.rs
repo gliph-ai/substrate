@@ -255,7 +255,7 @@ substrate reply {id} --final --text \"…\" · substrate deploy track {id} --com
 }
 
 /// The daemon's check before it types anything: only `\n`, `\t` and the
-/// [`ATTACH_DIR`] placeholder's NULs may be control characters.
+/// [`ATTACH_DIR`] placeholder's U+001F may be control characters.
 pub fn envelope_is_safe(env: &str) -> bool {
     let stripped = env.replace(ATTACH_DIR, "");
     !stripped.chars().any(|c| (c < ' ' && c != '\n' && c != '\t') || c == '\u{7f}' || ('\u{80}'..='\u{9f}').contains(&c))
