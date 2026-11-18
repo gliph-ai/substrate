@@ -426,6 +426,14 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     }))
 }
 
+fn human_size(n: i64) -> String {
+    match n {
+        0..=1023 => format!("{n} bytes"),
+        1024..=1_048_575 => format!("{} KB", n / 1024),
+        _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
+    }
+}
+
 fn truncate(s: &str, n: usize) -> String {
     let one = s.replace('\n', " ");
     if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
@@ -827,7 +835,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                     span.time { (hhmm(&e.created_at)) }
                 }
                 div.body style="font-size:16px" { (text) }
-                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (x.size / 1024) " KB · " (x.mime) } } } } }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (human_size(x.size)) " · " (x.mime) } } } } }
             }
         },
         "system" => {

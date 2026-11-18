@@ -149,7 +149,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 @keyframes orbspin { to { transform: rotate(360deg); } }
 @keyframes orbmorph { 0%, 100% { border-radius: 50% 46% 52% 48% / 48% 52% 46% 50%; } 33% { border-radius: 44% 56% 48% 52% / 56% 44% 54% 46%; } 66% { border-radius: 54% 46% 44% 56% / 46% 54% 50% 50%; } }
 @keyframes orbglow { 0%, 100% { box-shadow: 0 0 60px 6px #2E4BFF, 0 0 140px 30px #3A1C8C; } 50% { box-shadow: 0 0 80px 10px #6A3BFF, 0 0 160px 40px #1C3FAF; } }
-.orb { position: relative; display: inline-block; flex: none; border-radius: 50%; overflow: hidden; width: 20px; height: 20px;
+.orb { position: relative; display: inline-block; flex: none; border-radius: 50%; overflow: hidden; isolation: isolate; -webkit-mask-image: radial-gradient(#fff, #000); width: 20px; height: 20px;
   background: conic-gradient(from 20deg, #1E3BFF, #7B2CFF, #FF5FCF, #FFB070, #5FE6FF, #1E3BFF); animation: orbmorph 7s ease-in-out infinite; }
 .orb::before { content: ""; position: absolute; inset: -20%; mix-blend-mode: screen; animation: orbspin 9s linear infinite;
   background: conic-gradient(from 180deg at 55% 60%, #05061A 0deg, #0B1BFF 60deg, #05061A 120deg, #C04BFF 200deg, #05061A 260deg, #7FF0FF 320deg, #05061A 360deg); }
