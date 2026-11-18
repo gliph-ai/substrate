@@ -66,7 +66,7 @@ async fn session(app: &App, rx: &mut mpsc::UnboundedReceiver<GliphOut>) -> anyho
             out = rx.recv() => {
                 let Some(out) = out else { return Ok(()) };
                 let frame = match out {
-                    GliphOut::Say { channel, body } => json!({"t": "say", "d": {"channel": channel, "body": body}}).to_string(),
+                    GliphOut::Say { channel, body, agent } => json!({"t": "say", "d": {"channel": channel, "body": body, "agent": agent.unwrap_or("")}}).to_string(),
                     GliphOut::Resubscribe => register_frame(app).await?,
                 };
                 sink.send(WsMsg::Text(frame.into())).await?;
@@ -222,7 +222,7 @@ async fn on_event(app: &App, e: &Value) -> anyhow::Result<()> {
         guest_message(app, &p, &label, text).await
     };
     if let Err(err) = res {
-        app.gliph(GliphOut::Say { channel: channel.into(), body: format!("[{}] not sent: {}", p.handle, err.1) });
+        app.gliph(GliphOut::Say { channel: channel.into(), body: format!("[{}] not sent: {}", p.handle, err.1), agent: None });
     }
     Ok(())
 }

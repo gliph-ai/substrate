@@ -1,0 +1,40 @@
+# Test every push; deploy main to Pushleft (org empire, project substrate).
+# Needs the repository secret PUSHLEFT_TOKEN: an empire member service token.
+name: ci
+on: { push: { branches: [main] }, pull_request: {} }
+concurrency: { group: prod, cancel-in-progress: false }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      SUBSTRATE_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      # The relay tests use a fake herdr; the server suite needs only Postgres.
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test -p substrate-proto -p substrate-server
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      PL_VERSION: 0.1.0-6e5dc8d
+      PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
+      PUSHLEFT_TOKEN: ${{ secrets.PUSHLEFT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          curl -fsSL -o pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
+          echo "$PL_SHA256  pl" | sha256sum -c -
+          chmod +x pl && sudo mv pl /usr/local/bin/pl
+      - run: pl --org empire up --production
+      - run: curl -fsS https://substrate.gliph.sh/healthz

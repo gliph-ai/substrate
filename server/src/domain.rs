@@ -153,10 +153,10 @@ pub async fn add_event(
 
 /// One line in the project's Gliph channel, when it has one.
 async fn mirror(app: &AppInner, conv: &str, actor_kind: &str, actor_name: &str, kind: &str, text: &str, data: &Value) {
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT p.gliph_channel, p.handle FROM conversations c JOIN projects p ON p.id=c.project_id WHERE c.id=$1",
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT p.gliph_channel, p.handle, p.agent FROM conversations c JOIN projects p ON p.id=c.project_id WHERE c.id=$1",
     ).bind(conv).fetch_optional(&app.db).await.ok().flatten();
-    let Some((channel, handle)) = row else { return };
+    let Some((channel, handle, agent_kind)) = row else { return };
     if channel.is_empty() {
         return;
     }
@@ -168,7 +168,33 @@ async fn mirror(app: &AppInner, conv: &str, actor_kind: &str, actor_name: &str, 
         "deploy" => format!("[{handle}] deploy: {}", short(text)),
         _ => format!("[{handle}] {}", short(text)),
     };
-    app.gliph(GliphOut::Say { channel, body });
+    // The real mark of whoever the line is from: the tester's assistant, the
+    // project's coding agent, or the CI service.
+    let agent = match actor_kind {
+        "human" => brand(data.get("client").and_then(|v| v.as_str()).unwrap_or("")),
+        "agent" => brand(&agent_kind),
+        "deploy" => Some(if data["deploy"]["ci_url"].as_str().unwrap_or("").contains("gitlab") { "gitlab" } else { "github" }),
+        _ => None,
+    };
+    app.gliph(GliphOut::Say { channel, body, agent });
+}
+
+/// The Gliph brand name for an agent kind or an assistant's client name.
+pub fn brand(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase();
+    if n.contains("claude") || n.contains("anthropic") {
+        Some("claude")
+    } else if n.contains("codex") || n.contains("openai") || n.contains("chatgpt") {
+        Some("openai")
+    } else if n.contains("gemini") {
+        Some("gemini")
+    } else if n.contains("cursor") {
+        Some("cursor")
+    } else if n.contains("copilot") {
+        Some("copilot")
+    } else {
+        None
+    }
 }
 
 pub async fn set_stage(app: &AppInner, mid: &str, stage: &str) -> Result<(), Fail> {

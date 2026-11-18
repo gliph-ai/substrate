@@ -52,14 +52,15 @@ pub struct AppInner {
     pub hub: Mutex<HashMap<String, mpsc::UnboundedSender<CloudFrame>>>,
     /// conversation id → wakes long-polls and live pages on a new event.
     pub waiters: Mutex<HashMap<String, broadcast::Sender<i64>>>,
-    /// project id → wakes the dashboard on any change.
     pub limiter: Limiter,
     /// Lines for the Gliph plugin task to post: (channel id, text).
     pub gliph_out: Mutex<Option<mpsc::UnboundedSender<GliphOut>>>,
 }
 
 pub enum GliphOut {
-    Say { channel: String, body: String },
+    /// `agent`: the brand Gliph draws beside the line (its allowlist:
+    /// claude, openai, gemini, cursor, copilot, github, gitlab).
+    Say { channel: String, body: String, agent: Option<&'static str> },
     Resubscribe,
 }
 
