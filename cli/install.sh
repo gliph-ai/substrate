@@ -9,7 +9,7 @@ case "$os" in Darwin) os=darwin ;; Linux) os=linux ;; *) echo "substrate: $os is
 case "$arch" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x86_64 ;; *) echo "substrate: $arch is not supported yet" >&2; exit 1 ;; esac
 name="substrate-$os-$arch"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-echo "Downloading $name…"
+echo "Downloading ${name}..."
 curl -fsSL "$BASE/downloads/substrate/latest/$name" -o "$tmp/substrate"
 curl -fsSL "$BASE/downloads/substrate/latest/$name.sha256" -o "$tmp/sum"
 want=$(cut -d' ' -f1 < "$tmp/sum")
