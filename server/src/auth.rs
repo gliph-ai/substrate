@@ -258,14 +258,17 @@ pub async fn gliph_cb(State(app): State<App>, headers: HeaderMap, Query(q): Quer
         return bad("Gliph did not confirm the sign-in. Try again.");
     }
     #[derive(Deserialize)]
-    struct Tok { token: String, user: GliphUser }
+    struct Tok { token: String, user: GliphUser, #[serde(default)] email: String }
     let t: Tok = r.json().await.map_err(|e| anyhow::anyhow!(e))?;
     // We wanted the identity, not a Gliph session: sign that session out.
     let _ = http.post(format!("{}/api/logout", app.cfg.gliph_url)).bearer_auth(&t.token).send().await;
-    if !valid_email(&t.user.email) {
+    // gliph keeps email off its public user object; the substrate redemption
+    // carries it at the top level.
+    let email = if t.email.is_empty() { t.user.email.clone() } else { t.email.clone() };
+    if !valid_email(&email) {
         return bad("Your Gliph account has no email address to sign in with.");
     }
-    let aid = upsert_account(&app, &t.user.email).await?;
+    let aid = upsert_account(&app, &email).await?;
     sqlx::query("UPDATE accounts SET gliph_user_id=$2, gliph_nick=$3, name=CASE WHEN name='' THEN $3 ELSE name END WHERE id=$1")
         .bind(&aid).bind(&t.user.id).bind(&t.user.nick).execute(&app.db).await?;
     // A nick belongs to one Substrate account at a time.
