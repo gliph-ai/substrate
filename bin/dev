@@ -1,0 +1,9 @@
+#!/bin/sh
+# Local Substrate server at https://substrate.test (Caddy -> :8790).
+# Magic links are logged here instead of mailed (SUBSTRATE_DEV=1).
+set -eu
+cd "$(dirname "$0")/.."
+createdb substrate_dev 2>/dev/null || true
+export SUBSTRATE_DEV=1 PORT=8790 PUBLIC_URL="${PUBLIC_URL:-https://substrate.test}" \
+  DATABASE_URL="${DATABASE_URL:-postgres://localhost/substrate_dev}" SUBSTRATE_FILES=./data GLIPH_URL="${GLIPH_URL:-https://gliph.sh}"
+exec cargo run -p substrate-server

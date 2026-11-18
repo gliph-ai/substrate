@@ -20,9 +20,8 @@ Live at **https://substrate.gliph.sh**. Part of [Gliph](https://gliph.sh): sign 
 ## Develop
 
 ```sh
-createdb substrate_dev
-SUBSTRATE_DEV=1 PUBLIC_URL=http://localhost:8790 PORT=8790 DATABASE_URL=postgres://localhost/substrate_dev cargo run -p substrate-server
-# magic links are logged to stdout in dev
+bin/dev               # https://substrate.test (Caddy -> :8790); magic links are logged, not mailed
+herdr-substrate       # the dev workspace: server pane, shell, two Claude panes
 cargo test            # proto, server unit + end-to-end (needs local Postgres), relay with a fake Herdr
 cargo clippy --all-targets
 ```
