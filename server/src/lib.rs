@@ -59,7 +59,7 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     h.entry(header::X_FRAME_OPTIONS).or_insert(HeaderValue::from_static("DENY"));
     h.entry(header::STRICT_TRANSPORT_SECURITY).or_insert(HeaderValue::from_static("max-age=31536000"));
     h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static(
-        "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https: http://localhost:* http://127.0.0.1:*",
+        "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https: http://localhost:* http://127.0.0.1:*",
     ));
     r
 }
