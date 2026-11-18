@@ -595,7 +595,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                         }
                         div.inset style="font-size:13px" {
                             "Gliph channel: "
-                            @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/substrate link " (p.handle) } } }
+                            @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/invite substrate" } ", then " span.mono { "/substrate link " (p.handle) } } }
                             @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/p/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small type="submit" { "Unlink" } } }
                         }
                     }

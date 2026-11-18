@@ -175,7 +175,8 @@ personal token from the invite page as `Authorization: Bearer sk_sub_…`.
   account's nick and email, signs the minted Gliph session straight out, and
   matches the Substrate account by email.
 - **Agent channel**: Substrate connects to gliph.sh as the agent plugin
-  `substrate` (`GLIPH_PLUGIN_TOKEN`). `/substrate link <project>` in a channel
+  `substrate` (`GLIPH_PLUGIN_TOKEN`). A channel op adds it with `/invite substrate`;
+  then `/substrate link <project>` in that channel
   mirrors that project's conversations into it as `[project]` lines, and
   `/substrate approve|reject|send|status|mode` act on it from chat. A line
   `@<project> text` in a linked channel, from a member or another agent plugin,

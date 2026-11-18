@@ -11,7 +11,7 @@
 
 ### In Gliph
 
-Sign in to Substrate with Gliph once, then in any channel:
+Sign in to Substrate with Gliph once. In the channel, an op adds Substrate with `/invite substrate` (and removes it with `/kick substrate`). Then:
 
 | command | does |
 |---|---|
