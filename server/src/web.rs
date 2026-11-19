@@ -331,11 +331,6 @@ pub fn error_page(title: &str, msg: &str) -> Html<String> {
     }).into_string())
 }
 
-fn page(app: &AppInner, title: &str, acct: Option<&Account>, body: Markup) -> Html<String> {
-    let _ = app;
-    Html(layout(title, acct, None, body).into_string())
-}
-
 // ---- landing & sign-in ----
 
 pub async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Response, Fail> {
@@ -488,7 +483,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         .map(|p| (p, queued.iter().find(|q| q.0 == p.id).map(|q| q.1).unwrap_or(0)))
         .filter(|(p, q)| p.state != "unbound" || *q > 0).collect();
 
-    Ok(page(app, "Dashboard", Some(a), html! {
+    Ok(Html(layout("Dashboard", Some(a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
             div.between style="padding:8px 4px 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
@@ -579,7 +574,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 }
             }
         }
-    }))
+    }).into_string()))
 }
 
 fn human_size(n: i64) -> String {
@@ -897,6 +892,36 @@ pub async fn unlink_gliph(State(app): State<App>, headers: HeaderMap, User(a): U
     app.gliph(crate::app::GliphOut::Resubscribe);
     audit(&app, &a.id, &pid, &a.label(), "gliph.unlinked", &pid, "web").await;
     Ok(Redirect::to(&format!("/projects/{pid}?flash=Unlinked+from+Gliph.")).into_response())
+}
+
+/// Server-sent "changed" whenever any of these accounts' agents change: the
+/// relay pushes pane and agent state over its websocket, this passes it on.
+pub fn account_live(app: &AppInner, accounts: &[String]) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>> + use<>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    for acct in accounts {
+        let mut w = app.waiter(&format!("acct:{acct}"));
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            while let Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) = w.recv().await {
+                if tx.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await?;
+        // Coalesce a burst (Hello, reconcile, pumps) into one refresh.
+        tokio::time::sleep(StdDuration::from_millis(300)).await;
+        while rx.try_recv().is_ok() {}
+        Some((Ok(SseEvent::default().data("changed")), rx))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// GET /live: the dashboard and Machines refresh when the owner's agents change.
+pub async fn live(State(app): State<App>, User(a): User) -> impl IntoResponse {
+    account_live(&app, std::slice::from_ref(&a.id))
 }
 
 pub async fn project_live(State(app): State<App>, User(a): User, Path(pid): Path<String>) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Fail> {
@@ -1479,7 +1504,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
         "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
     ).bind(&a.id).fetch_all(&app.db).await?;
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
-    Ok(Html(layout("Machines", Some(&a), None, html! {
+    Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
             h1 { "Machines" }
             @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login"])) } }

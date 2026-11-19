@@ -334,6 +334,13 @@ document.addEventListener("submit", (e) => {
   root.addEventListener("dragover", (e) => e.preventDefault());
   root.addEventListener("drop", (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
 
+  // Agent status is pushed: the relay's websocket reaches the server, which
+  // sends "changed" here; then the sidebar pills and the header refresh.
+  if (window.EventSource) {
+    const live = root.dataset.rpc === "/chat/rpc" ? "/chat/live" : root.dataset.rpc + "/live";
+    new EventSource(live).onmessage = () => reload().catch(() => {});
+  }
+
   $("chat-new").onclick = fresh;
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });

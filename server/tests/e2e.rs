@@ -524,7 +524,14 @@ async fn oauth_pkce_flow() {
 async fn question_round_trip_and_concurrent_projects() {
     let t = setup().await;
     let w = world(&t).await;
+    let mut live = t.app.waiter(&format!("acct:{}", w.dev.account));
     let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), Pane { pane_id: "w2:p1".into(), agent: "codex".into(), agent_session: "z1".into(), status: "idle".into(), title: "Tuli".into(), cwd: "/work/tuli".into(), ..Default::default() }]).await;
+    // The relay's hello is pushed on to the owner's open pages.
+    tokio::time::timeout(Duration::from_secs(2), live.recv()).await.expect("pushed").unwrap();
+    send(&mut ws, DaemonFrame::Panes { panes: vec![pane("w1:p1", "s1", "working"), Pane { pane_id: "w2:p1".into(), agent: "codex".into(), agent_session: "z1".into(), status: "idle".into(), title: "Tuli".into(), cwd: "/work/tuli".into(), ..Default::default() }] }).await;
+    while live.try_recv().is_ok() {}
+    tokio::time::timeout(Duration::from_secs(2), live.recv()).await.expect("working pushed").unwrap();
+    send(&mut ws, DaemonFrame::Panes { panes: vec![pane("w1:p1", "s1", "idle"), Pane { pane_id: "w2:p1".into(), agent: "codex".into(), agent_session: "z1".into(), status: "idle".into(), title: "Tuli".into(), cwd: "/work/tuli".into(), ..Default::default() }] }).await;
     let pid2 = t.pane_project("w2:p1").await;
 
     // Developer messages from the owner are auto-approved; two projects run at once.

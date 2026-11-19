@@ -524,6 +524,9 @@ pub async fn machine_presence(app: &AppInner, machine: &str, online: bool) -> Re
         sqlx::query("UPDATE machines SET last_seen=now() WHERE id=$1").bind(machine).execute(&app.db).await?;
         sqlx::query("UPDATE projects SET state='offline' WHERE machine_id=$1 AND state <> 'unbound'").bind(machine).execute(&app.db).await?;
     }
+    if let Ok(Some(acct)) = sqlx::query_scalar::<_, String>("SELECT account_id FROM machines WHERE id=$1").bind(machine).fetch_optional(&app.db).await {
+        app.changed(&acct);
+    }
     Ok(())
 }
 
@@ -543,6 +546,7 @@ pub async fn housekeeping(app: &AppInner) -> Result<(), Fail> {
     for p in gone {
         crate::app::audit(app, &p.owner_id, "", "Substrate", "project.cleaned_up", &p.handle, "agent gone for 10 minutes").await;
         delete_project(app, &p).await?;
+        app.changed(&p.owner_id);
     }
     sqlx::query("DELETE FROM tokens WHERE expires_at < now() - interval '1 day'").execute(&app.db).await?;
     sqlx::query("DELETE FROM pairings WHERE expires_at < now() - interval '1 day'").execute(&app.db).await?;

@@ -75,6 +75,10 @@ impl AppInner {
             let _ = tx.send(seq);
         }
     }
+    /// Tell an account's open pages that its agents changed (state, panes, presence).
+    pub fn changed(&self, account: &str) {
+        self.wake(&format!("acct:{account}"), 0);
+    }
     pub fn send_machine(&self, machine: &str, f: CloudFrame) -> bool {
         let hub = self.hub.lock().unwrap();
         hub.get(machine).map(|tx| tx.send(f).is_ok()).unwrap_or(false)

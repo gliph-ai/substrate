@@ -58,6 +58,21 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
     }
 }
 
+/// GET /chat/live: "changed" when an agent of a project this person tests changes.
+pub async fn live(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
+    let owners: Vec<String> = sqlx::query_scalar("SELECT DISTINCT p.owner_id FROM members m JOIN projects p ON p.id=m.project_id WHERE m.account_id=$1")
+        .bind(&a.id).fetch_all(&app.db).await?;
+    Ok(crate::web::account_live(&app, &owners).into_response())
+}
+
+/// GET /mcp/{secret}/live: the same for an access link.
+pub async fn link_live(State(app): State<App>, Path(secret): Path<String>) -> Result<Response, Fail> {
+    let (acct, _, _) = crate::links::resolve(&app, &secret).await.ok_or_else(|| Fail::new(404, "this access link is not valid"))?;
+    let owners: Vec<String> = sqlx::query_scalar("SELECT DISTINCT p.owner_id FROM members m JOIN projects p ON p.id=m.project_id WHERE m.account_id=$1")
+        .bind(&acct).fetch_all(&app.db).await?;
+    Ok(crate::web::account_live(&app, &owners).into_response())
+}
+
 pub async fn page(User(a): User) -> Response {
     Html(shell(&a.label(), "/chat/rpc", &a.csrf, true).into_string()).into_response()
 }

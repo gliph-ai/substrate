@@ -251,6 +251,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             // Welcome carries whatever this creates or moves.
             reconcile_panes(app, machine, &panes, false).await?;
             let _ = tx.send(CloudFrame::Welcome { machine_id: machine.to_string(), projects: bindings(app, machine).await? });
+            app.changed(account);
             // Anything sent but never acknowledged goes again with the same
             // delivery id; the relay drops a repeat it already holds.
             let unacked = sqlx::query_as::<_, Message>(
@@ -266,6 +267,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
         DaemonFrame::Panes { panes } => {
             sqlx::query("UPDATE machines SET panes=$2, last_seen=now() WHERE id=$1").bind(machine).bind(sqlx::types::Json(&panes)).execute(&app.db).await?;
             reconcile_panes(app, machine, &panes, true).await?;
+            app.changed(account);
         }
         DaemonFrame::Status { project_id, state } => {
             let allowed = ["idle", "working", "blocked", "done", "unknown", "offline", "needs_rebind"];
@@ -276,6 +278,9 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
                 .execute(&app.db).await?.rows_affected();
             if n == 1 && matches!(state.as_str(), "idle" | "done") {
                 domain::pump(app, &project_id).await?;
+            }
+            if n == 1 {
+                app.changed(account);
             }
         }
         DaemonFrame::Ack { delivery_id, stage, detail } => {
