@@ -186,6 +186,47 @@ fn state_dot(state: &str) -> &'static str {
     }
 }
 
+/// Stages of a message that still waits to reach an agent.
+const QUEUED: &[&str] = &["pending_approval", "held", "approved", "dispatched"];
+
+/// No agent receives the project's messages right now.
+pub fn agent_gone(state: &str) -> bool {
+    matches!(state, "needs_rebind" | "offline" | "unbound")
+}
+
+/// Agents on the owner's online computers, the ones in the project's folder first.
+async fn rebind_candidates(app: &AppInner, owner: &str, p: &Project) -> Result<Vec<(String, String, serde_json::Value)>, Fail> {
+    let ms: Vec<(String, String, serde_json::Value)> = sqlx::query_as("SELECT id, name, panes FROM machines WHERE account_id=$1 AND NOT revoked").bind(owner).fetch_all(&app.db).await?;
+    let mut out: Vec<(String, String, serde_json::Value)> = ms.into_iter().filter(|m| app.machine_online(&m.0))
+        .flat_map(|(id, name, panes)| panes.as_array().cloned().unwrap_or_default().into_iter().map(move |pn| (id.clone(), name.clone(), pn)))
+        .filter(|(_, _, pn)| !pn["agent"].as_str().unwrap_or("").is_empty()).collect();
+    out.sort_by_key(|(_, _, pn)| pn["cwd"].as_str() != Some(p.cwd.as_str()));
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+pub struct BindForm {
+    csrf: String,
+    machine_id: String,
+    pane_id: String,
+}
+
+/// Move here on the project page.
+pub async fn project_bind(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<BindForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let p = domain::project(&app, &pid).await?;
+    if p.owner_id != a.id {
+        return Err(Fail::new(404, "no such project"));
+    }
+    let panes: serde_json::Value = sqlx::query_scalar("SELECT panes FROM machines WHERE id=$1 AND account_id=$2 AND NOT revoked")
+        .bind(&f.machine_id).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such computer"))?;
+    let pn = panes.as_array().into_iter().flatten().find(|x| x["pane_id"] == f.pane_id.as_str()).ok_or_else(|| Fail::new(404, "that pane is gone"))?;
+    let g = |k: &str| pn[k].as_str().unwrap_or("").to_string();
+    let b = crate::relay::Bind { pane_id: f.pane_id.clone(), agent_session: g("agent_session"), agent: g("agent"), cwd: g("cwd") };
+    crate::relay::bind_project(&app, &a.id, &p, &f.machine_id, &b).await?;
+    Ok(Redirect::to(&format!("/projects/{pid}")).into_response())
+}
+
 /// The agent's state as a pill: free, working or needs you.
 fn status_tag(state: &str) -> Markup {
     let (cls, txt) = match state {
@@ -431,6 +472,11 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     let hour = (now() + Duration::hours(0)).format("%H").to_string().parse::<u32>().unwrap_or(12);
     let greet = match hour { 5..=11 => "Good morning,", 12..=17 => "Good afternoon,", _ => "Good evening," };
     let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage='completed'").bind(&a.id).fetch_one(&app.db).await?;
+    let queued: Vec<(String, i64)> = sqlx::query_as("SELECT m.project_id, count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage = ANY($2) GROUP BY 1")
+        .bind(&a.id).bind(QUEUED).fetch_all(&app.db).await?;
+    let gone: Vec<(&Project, i64)> = owned.iter().filter(|p| agent_gone(&p.state))
+        .map(|p| (p, queued.iter().find(|q| q.0 == p.id).map(|q| q.1).unwrap_or(0)))
+        .filter(|(p, q)| p.state != "unbound" || *q > 0).collect();
 
     Ok(page(app, "Dashboard", Some(a), html! {
         div.stack style="padding:12px 0 48px" {
@@ -446,6 +492,19 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                             a.item href=(format!("/conversations/{}", m.conversation_id)) {
                                 span.l { span class=(format!("dot {}", if m.stage == "held" { "bad" } else { "warn" })) {} span { (truncate(&m.text, 90)) } @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } } }
                                 span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) (m.client_name) " · " (ago(&m.created_at)) }
+                            }
+                        }
+                    }
+                }
+            }
+            @if !gone.is_empty() {
+                div.card.attention {
+                    div.row style="font-size:19px;font-weight:500" { "Agents gone" }
+                    div.list style="padding:0;background:transparent" {
+                        @for (p, q) in &gone {
+                            a.item href=(format!("/projects/{}", p.id)) {
+                                span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (status_tag(&p.state)) }
+                                span.r { @if *q > 0 { (q) " queued · " } "Rebind" }
                             }
                         }
                     }
@@ -538,6 +597,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
          WHERE c.project_id=$1 AND ($2 OR c.sender_id=$3) ORDER BY c.updated_at DESC LIMIT 50",
     ).bind(&pid).bind(owner).bind(&a.id).fetch_all(&app.db).await?;
     let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&pid).fetch_one(&app.db).await?;
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage = ANY($2)").bind(&pid).bind(QUEUED).fetch_one(&app.db).await?;
+    let candidates = if owner && agent_gone(&p.state) { rebind_candidates(&app, &a.id, &p).await? } else { vec![] };
     let held: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='held'").bind(&pid).fetch_one(&app.db).await?;
     let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='completed'").bind(&pid).fetch_one(&app.db).await?;
     let deploying: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND deploy_stage IN ('fix_committed','ci_running','ci_passed','deploying')").bind(&pid).fetch_one(&app.db).await?;
@@ -579,11 +640,25 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     }
                 }
             }
-            @if p.state == "needs_rebind" && owner {
+            @if owner && agent_gone(&p.state) {
                 div.card.attention {
-                    h3 { "The agent's pane is gone" }
-                    p style="color:#E4D9C4;margin:0" { "Herdr pane " span.mono { (p.pane_id) } " closed or now runs a different session. Messages stay queued; nothing goes to whatever replaced it. Bind the project to its new pane:" }
-                    (cmd(&["substrate herdr discover", &format!("substrate project bind {} <pane-id>", p.handle)]))
+                    h3 { @match p.state.as_str() { "offline" => "The computer is offline", "unbound" => "No pane", _ => "The agent's session ended" } }
+                    p style="color:#E4D9C4;margin:0" {
+                        @if queued > 0 { (queued) @if queued == 1 { " message waits" } @else { " messages wait" } " for an agent. " }
+                        "Testers see the agent as offline. Move the project to a running agent:"
+                    }
+                    @if candidates.is_empty() { p.muted { "No agent runs on an online computer. Start one in Herdr." } }
+                    div.list style="padding:0;background:transparent" {
+                        @for (mid, mname, pn) in &candidates {
+                            @let pid_ = pn["pane_id"].as_str().unwrap_or("");
+                            div.item {
+                                span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid_) } span.faint { (mname) }
+                                    @if pn["cwd"].as_str() == Some(p.cwd.as_str()) && !p.cwd.is_empty() { span.tag.ok { "same folder" } } }
+                                span.r { (status_tag(pn["status"].as_str().unwrap_or("")))
+                                    form.inline method="post" action=(format!("/projects/{}/bind", p.id)) { (csrf(&a)) input type="hidden" name="machine_id" value=(mid); input type="hidden" name="pane_id" value=(pid_); button.btn.small.primary type="submit" { (ic("arrow-right")) "Move here" } } }
+                            }
+                        }
+                    }
                 }
             }
             div.grid.tight {

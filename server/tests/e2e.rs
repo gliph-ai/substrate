@@ -350,9 +350,14 @@ async fn offline_rebind_busy_and_restart() {
     let t = setup().await;
     let w = world(&t).await;
 
-    // Relay offline: approved messages stay queued, with an honest summary.
+    // Relay offline: the tester sees it, and a send needs send_anyway.
+    let pj = t.mcp(&w.pat, "get_project", json!({"project_id": w.pid})).await;
+    assert_eq!(pj["structuredContent"]["agent_online"], false, "{pj}");
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "hello?"})).await;
+    assert_eq!(r["isError"], true, "{r}");
+    // With send_anyway, approved messages stay queued, with an honest summary.
     let send_msg = |text: &'static str| { let (t, w) = (&t, &w); async move {
-        let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": text})).await;
+        let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": text, "send_anyway": true})).await;
         let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
         t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{mid}/approve"), json!({})).await;
         mid
@@ -374,10 +379,17 @@ async fn offline_rebind_busy_and_restart() {
     quiet(&mut ws).await;
     assert_eq!(t.stage(&a).await, "approved");
 
-    // The developer rebinds explicitly; delivery resumes, in order, one at a time.
-    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/api/projects/verna/bind", json!({"pane_id": "w1:p1", "agent_session": "s2-new", "agent": "claude", "cwd": "/work/verna"})).await;
-    assert_eq!(st, 200);
-    send(&mut ws, DaemonFrame::Panes { panes: vec![pane("w1:p1", "s2-new", "idle")] }).await;
+    // The dashboard lists the project with its queue; the project page offers the new pane.
+    let dash = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(dash.contains("Agents gone") && dash.contains("2 queued"), "dashboard");
+    let page = t.http.get(format!("{}/projects/{}", t.base, w.pid)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("Move here") && page.contains("same folder"), "project page");
+    assert_eq!(t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "gone"})).await["isError"], true);
+
+    // The developer moves it from the web; delivery resumes, in order, one at a time.
+    let mid: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
+    let r = t.form(&w.dev, &format!("/projects/{}/bind", w.pid), &[("machine_id", mid.as_str()), ("pane_id", "w1:p1")]).await;
+    let st = r.status(); assert_eq!(st, 303, "{}", r.text().await.unwrap());
     let (d1, m1, _, r1) = deliver(&mut ws).await;
     assert_eq!(m1, a, "oldest first");
     send(&mut ws, DaemonFrame::Ack { delivery_id: d1.clone(), stage: AckStage::Submitted, detail: String::new() }).await;

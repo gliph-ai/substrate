@@ -557,13 +557,13 @@ async fn owned_by_handle(app: &AppInner, account: &str, handle: &str) -> Result<
 
 #[derive(Deserialize)]
 pub struct Bind {
-    pane_id: String,
+    pub pane_id: String,
     #[serde(default)]
-    agent_session: String,
+    pub agent_session: String,
     #[serde(default)]
-    agent: String,
+    pub agent: String,
     #[serde(default)]
-    cwd: String,
+    pub cwd: String,
 }
 
 /// Explicit developer action: binding (or moving) a project to a pane on this
@@ -571,20 +571,32 @@ pub struct Bind {
 pub async fn api_bind(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>, Json(b): Json<Bind>) -> Result<Json<Value>, Fail> {
     let (account, machine) = machine_auth(&app, &headers).await?;
     let p = owned_by_handle(&app, &account, &handle).await?;
-    let old_machine = p.machine_id.clone();
+    bind_project(&app, &account, &p, &machine, &b).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// Bind (or move) a project to a pane: `substrate project bind` and Rebind on
+/// the project page. Queued messages follow the project to the new agent.
+pub async fn bind_project(app: &AppInner, account: &str, p: &Project, machine: &str, b: &Bind) -> Result<(), Fail> {
     sqlx::query("UPDATE projects SET machine_id=$2, pane_id=$3, agent_session=$4, agent=$5, cwd=$6, state='unknown' WHERE id=$1")
-        .bind(&p.id).bind(&machine).bind(proto::sanitize(&b.pane_id, 64)).bind(proto::sanitize(&b.agent_session, 128))
+        .bind(&p.id).bind(machine).bind(proto::sanitize(&b.pane_id, 64)).bind(proto::sanitize(&b.agent_session, 128))
         .bind(proto::sanitize(&b.agent, 32)).bind(proto::sanitize(&b.cwd, 512)).execute(&app.db).await?;
     // Sent but never acknowledged: it goes to the new binding. Anything the
     // old agent already had is interrupted, never resent by itself.
     sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE project_id=$1 AND stage='dispatched'").bind(&p.id).execute(&app.db).await?;
-    interrupt_in_flight(&app, &p.id, "The project moved to another pane before the agent finished. The developer can deliver it again.").await?;
-    audit(&app, &account, &p.id, &handle, "project.bound", &b.pane_id, &format!("machine {machine}")).await;
-    push_bindings(&app, &machine).await?;
-    if !old_machine.is_empty() && old_machine != machine {
-        push_bindings(&app, &old_machine).await?;
+    interrupt_in_flight(app, &p.id, "The project moved to another pane before the agent finished. The developer can deliver it again.").await?;
+    audit(app, account, &p.id, &p.handle, "project.bound", &b.pane_id, &format!("machine {machine}")).await;
+    push_bindings(app, machine).await?;
+    if !p.machine_id.is_empty() && p.machine_id != machine {
+        push_bindings(app, &p.machine_id).await?;
     }
-    Ok(Json(json!({"ok": true})))
+    // Set the state from the panes we already have, so the queue moves now
+    // and not at the next pane change.
+    let panes: Option<sqlx::types::Json<Vec<Pane>>> = sqlx::query_scalar("SELECT panes FROM machines WHERE id=$1").bind(machine).fetch_optional(&app.db).await?;
+    if let Some(ps) = panes {
+        reconcile_panes(app, machine, &ps.0).await?;
+    }
+    Ok(())
 }
 
 pub async fn api_unbind(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>) -> Result<Json<Value>, Fail> {

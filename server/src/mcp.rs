@@ -52,11 +52,12 @@ fn all_tools() -> Value {
          "description": "Details of one project: what it is, who develops it, which coding agent receives messages, and whether it is online.",
          "inputSchema": {"type": "object", "properties": {"project_id": pid}, "required": ["project_id"]}},
         {"name": "send_message", "title": "Send a message to the developer's agent",
-         "description": "When the user reports a bug, asks for an improvement, or has a question for the developer, use this tool to send their message to the project's development agent. Write the message in the user's own words and include what they did, what they expected and what happened. Attach screenshots or logs with `attachments` (base64) or, if you cannot send file bytes, call create_upload_link first and set include_uploaded_files. The developer usually approves messages before the agent sees them. Returns a status block; tell the user the summary.",
+         "description": "When the user reports a bug, asks for an improvement, or has a question for the developer, use this tool to send their message to the project's development agent. Write the message in the user's own words and include what they did, what they expected and what happened. Attach screenshots or logs with `attachments` (base64) or, if you cannot send file bytes, call create_upload_link first and set include_uploaded_files. Check agent_online first: an offline agent gets the message only when the developer starts it again. The developer usually approves messages before the agent sees them. Returns a status block; tell the user the summary.",
          "inputSchema": {"type": "object", "properties": {
             "project_id": pid,
             "text": {"type": "string", "description": "The message, in the user's words. Plain text, up to 8000 characters."},
             "conversation_id": {"type": "string", "description": "Continue an existing conversation instead of starting a new one."},
+            "send_anyway": {"type": "boolean", "description": "Send while the agent is offline. Set it only after the user agrees to wait."},
             "kind": {"type": "string", "enum": ["feedback", "question", "task"], "description": "feedback for bugs and impressions, question for questions, task for a requested change."},
             "attachments": {"type": "array", "maxItems": 5, "items": {"type": "object", "properties": {
                 "name": {"type": "string"}, "data_base64": {"type": "string", "description": "The file's bytes, base64. PNG, JPEG, WebP, PDF or text; 10 MB at most."}},
@@ -185,10 +186,16 @@ async fn my_message(app: &AppInner, account: &str, mid: &str) -> Result<(Message
     Ok((m, !owner))
 }
 
+/// A running agent receives the project's messages. False when the computer
+/// is offline or the agent's session ended and the developer has not moved it.
+fn agent_available(app: &AppInner, p: &Project) -> bool {
+    app.machine_online(&p.machine_id) && !crate::web::agent_gone(&p.state)
+}
+
 fn project_json(app: &AppInner, p: &Project, role: &str, owner: &str) -> Value {
     json!({"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
         "icon_url": if p.icon_etag.is_empty() { Value::Null } else { json!(format!("{}/projects/{}/icon?v={}", app.cfg.public_url, p.id, p.icon_etag)) },
-        "agent": agent_label(&p.agent), "agent_online": app.machine_online(&p.machine_id),
+        "agent": agent_label(&p.agent), "agent_online": agent_available(app, p),
         "agent_state": p.state, "your_role": role,
         "approval": if p.auto_active() { "auto relay: messages go to the agent without manual approval" } else { "the developer approves each message" }})
 }
@@ -229,6 +236,9 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
         }
         "send_message" => {
             let (p, _) = member_project(app, account, s(a, "project_id")).await?;
+            if !agent_available(app, &p) && !a.get("send_anyway").and_then(|v| v.as_bool()).unwrap_or(false) {
+                return Err(Fail::new(409, "The agent is offline. A message waits until the developer starts it again. Tell the user. Send again with send_anyway only if they still want to."));
+            }
             let mut ids: Vec<String> = vec![];
             if let Some(list) = a.get("attachments").and_then(|v| v.as_array()) {
                 if list.len() > 5 {
