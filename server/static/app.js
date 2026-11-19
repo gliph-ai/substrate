@@ -128,6 +128,15 @@ document.addEventListener("submit", (e) => {
   }
 
   const project = () => S.projects.find((p) => p.project_id === S.pid);
+  // The developer by name: "waseem" -> "Waseem". Server notes say "the developer".
+  const dev = () => { const d = (project() || {}).developer || ""; return d ? d.charAt(0).toUpperCase() + d.slice(1) : "the developer"; };
+  const named = (t) => String(t || "").replace(/\b[Tt]he developer\b/g, dev());
+  const LOGOS = [["claude", "claude"], ["codex", "openai"], ["openai", "openai"], ["gemini", "gemini"], ["cursor", "cursor"], ["copilot", "copilot"]];
+  function agentLogo(name) {
+    const hit = LOGOS.find(([k]) => String(name || "").toLowerCase().includes(k));
+    if (!hit) return null;
+    const i = el("img", "logo"); i.src = "/static/logos/" + hit[1] + ".svg"; i.alt = ""; i.width = i.height = 16; return i;
+  }
   const available = (p) => p && p.agent_online;
   function pill(p) {
     if (!available(p)) return el("span", "tag", "offline");
@@ -165,12 +174,14 @@ document.addEventListener("submit", (e) => {
   function head(summary) {
     const p = project(), h = $("chat-head"); h.replaceChildren();
     if (!p) return;
-    const t = el("div", "row"); t.append(icon(p), el("strong", null, p.name), el("span", "faint", (p.agent || "agent") + " · " + p.developer), pill(p));
+    const t = el("div", "row"); t.append(icon(p), el("strong", null, p.name));
+    const lg = agentLogo(p.agent); if (lg) t.append(lg);
+    t.append(el("span", "faint", (p.agent || "agent") + " · " + dev()), pill(p));
     h.append(t);
-    if (summary) h.append(el("div", "muted chat-sum", summary));
+    if (summary) h.append(el("div", "muted chat-sum", named(summary)));
     const ban = $("chat-banner"), btn = $("chat-send").querySelector("span");
     if (available(p)) { ban.hidden = true; btn.textContent = S.next === "answer_question" ? "Answer" : "Send"; }
-    else { ban.hidden = false; ban.textContent = "The agent is offline. A message waits until the developer starts it again."; btn.textContent = "Send anyway"; }
+    else { ban.hidden = false; ban.textContent = "The agent is offline. A message waits until " + dev() + " starts it again."; btn.textContent = "Send anyway"; }
     $("chat-text").placeholder = S.next === "answer_question" ? "Answer the agent's question" : "Message " + (p.agent || "the agent");
   }
 
@@ -184,9 +195,11 @@ document.addEventListener("submit", (e) => {
       if (e.actor === "human") { n = el("div", "msg me"); n.append(rich(e.text), files(e.attachments)); }
       else if (e.actor === "agent") {
         n = el("div", "msg agent");
-        n.append(el("div", "who", e.name + (e.kind === "question" ? " asks" : "")), rich(e.agent_text), files(e.attachments));
+        const who = el("div", "who"), lg = agentLogo(e.name); if (lg) who.append(lg);
+        who.append(e.name + (e.kind === "question" ? " asks" : ""));
+        n.append(who, rich(e.agent_text), files(e.attachments));
       } else if (e.actor === "deploy") n = el("div", "note", "Deploy: " + (e.agent_text || ""));
-      else n = el("div", "note", e.text || e.kind);
+      else n = el("div", "note", named(e.text || e.kind));
       log.append(n);
     }
     log.scrollTop = log.scrollHeight;
@@ -214,7 +227,10 @@ document.addEventListener("submit", (e) => {
     S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set();
     history.replaceState(null, "", location.pathname);
     const log = $("chat-log"), e = el("div", "chat-empty");
-    e.append(el("h2", null, "What do you want to tell " + ((project() || {}).name || "the developer") + "?"), el("p", "muted", "Report a bug, ask a question or request a change. The developer sees every message."));
+    const p = project(), big = p ? icon(p) : null;
+    if (big) { big.style.width = big.style.height = "64px"; big.style.fontSize = "28px"; big.style.borderRadius = "18px"; e.append(big); }
+    e.append(el("h2", null, p ? "Talk to " + dev() + "'s " + (p.agent || "agent") + " on " + p.name + "." : "Talk to the developer's agent."),
+      el("p", "muted", "Report a bug, ask a question or request a change. " + dev().charAt(0).toUpperCase() + dev().slice(1) + " sees every message."));
     log.replaceChildren(e);
     sidebar(); head(); $("chat-text").focus();
   }
@@ -282,6 +298,6 @@ document.addEventListener("submit", (e) => {
       const ban = $("chat-banner"); ban.hidden = false; ban.textContent = err.message;
     } finally { btn.disabled = false; }
   });
-  reload().then(() => { if (location.hash.startsWith("#c_")) open(location.hash.slice(1)); })
+  reload().then(() => { if (location.hash.startsWith("#c_")) open(location.hash.slice(1)); else fresh(); })
     .catch((e) => add([{ seq: -1, actor: "system", text: e.message }]));
 })();
