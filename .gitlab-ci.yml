@@ -40,5 +40,6 @@ deploy:
     - curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
     - echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
     - chmod +x /usr/local/bin/pl
-    - pl --org empire up --production
+    # The token names its org (empire); --org cannot be combined with it.
+    - pl up --production
     - curl -fsS https://substrate.gliph.sh/healthz
