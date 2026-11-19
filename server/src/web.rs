@@ -101,6 +101,7 @@ pub(crate) fn cmd(lines: &[&str]) -> Markup {
 pub(crate) fn ic(name: &str) -> Markup {
     let d = match name {
         "log-out" => r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#,
+        "monitor-off" => r#"<path d="M17 17H4a2 2 0 0 1-2-2V5c0-1.5 1-2 1-2"/><path d="M22 15V5a2 2 0 0 0-2-2H9"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m2 2 20 20"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -183,6 +184,20 @@ fn state_dot(state: &str) -> &'static str {
         "offline" | "unbound" => "",
         _ => "",
     }
+}
+
+/// The agent's state as a pill: free, working or needs you.
+fn status_tag(state: &str) -> Markup {
+    let (cls, txt) = match state {
+        "idle" | "done" => ("ok", "free"),
+        "working" => ("blue", "working"),
+        "blocked" => ("warn", "needs you"),
+        "needs_rebind" => ("bad", "pane gone"),
+        "offline" => ("", "offline"),
+        "unbound" => ("", "no pane"),
+        _ => ("", "unknown"),
+    };
+    html! { span class=(format!("tag {cls}")) { (txt) } }
 }
 
 fn state_label(state: &str) -> &'static str {
@@ -457,7 +472,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                             @for p in &owned {
                                 a.item href=(format!("/projects/{}", p.id)) {
                                     span.l { (picon(&p.id, &p.name, &p.icon_etag, 28)) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) }
-                                    span.r { (state_label(&p.state)) " · " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
+                                    span.r { (status_tag(&p.state)) " " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
                                 }
                             }
                         }
@@ -1378,6 +1393,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
     let ms: Vec<(String, String, String, String, Option<DateTime<Utc>>, serde_json::Value)> = sqlx::query_as(
         "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
     ).bind(&a.id).fetch_all(&app.db).await?;
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Machines", Some(&a), None, html! {
         div.stack style="padding:12px 0 48px" {
             h1 { "Machines" }
@@ -1386,29 +1402,53 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                 div.card {
                     div.between {
                         div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
-                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("log-out")) "Sign out" } }
+                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
                     }
                     span.muted style="font-size:13px" { @if app.machine_online(mid) { "Online now." } @else if let Some(s) = seen { "Last seen " (ago(s)) " ago." } @else { "Never connected." } }
-                    @if let Some(list) = panes.as_array() { @if !list.is_empty() {
+                    @for (space, list) in spaces(panes) {
                         div.list style="padding:0;background:transparent" {
-                            div.label { "Agents in herdr" }
+                            div.label { (space) }
                             @for pn in list {
-                                div.item {
-                                    span.l { span class=(format!("dot {}", state_dot(pn["status"].as_str().unwrap_or("")))) {} (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span.mono { (pn["pane_id"].as_str().unwrap_or("")) } span { (pn["title"].as_str().unwrap_or("")) } }
-                                    span.r { (pn["status"].as_str().unwrap_or("")) }
+                                @let pid = pn["pane_id"].as_str().unwrap_or("");
+                                @let bound = projects.iter().find(|p| &p.machine_id == mid && p.pane_id == pid);
+                                @let status = pn["status"].as_str().unwrap_or("");
+                                @match bound {
+                                    Some(p) => a.item href=(format!("/projects/{}", p.id)) {
+                                        span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span.mono.faint { (pid) } }
+                                        span.r { (status_tag(status)) }
+                                    },
+                                    None => div.item {
+                                        span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } span.faint { "no project" } }
+                                        span.r { (status_tag(status)) }
+                                    },
                                 }
                             }
                         }
-                    } }
+                    }
                 }
             }
         }
     }).into_string()).into_response())
 }
 
+/// Panes grouped by Herdr workspace, in Herdr's own order. An older relay
+/// sends no label, so fall back to the id before the colon.
+fn spaces(panes: &serde_json::Value) -> Vec<(String, Vec<&serde_json::Value>)> {
+    let mut out: Vec<(String, Vec<&serde_json::Value>)> = vec![];
+    for pn in panes.as_array().into_iter().flatten() {
+        let ws = pn["workspace"].as_str().filter(|w| !w.is_empty()).map(str::to_string)
+            .unwrap_or_else(|| pn["pane_id"].as_str().unwrap_or("").split(':').next().unwrap_or("").to_string());
+        match out.iter_mut().find(|(w, _)| *w == ws) {
+            Some((_, l)) => l.push(pn),
+            None => out.push((ws, vec![pn])),
+        }
+    }
+    out
+}
+
 pub async fn machine_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
-    crate::relay::revoke_machine(&app, &a.id, &mid, "signed out from the web").await?;
+    crate::relay::revoke_machine(&app, &a.id, &mid, "disconnected from the web").await?;
     Ok(Redirect::to("/machines").into_response())
 }
 

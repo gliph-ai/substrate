@@ -73,13 +73,24 @@ pub fn pane_from(a: &Value) -> Pane {
         status: a["agent_status"].as_str().unwrap_or("unknown").into(),
         cwd: a["cwd"].as_str().unwrap_or_default().into(),
         title: a["terminal_title_stripped"].as_str().unwrap_or_default().into(),
+        workspace: a["workspace_id"].as_str().unwrap_or_default().into(),
     }
 }
 
 impl Herdr for Cli {
     fn list(&self) -> Result<Vec<Pane>> {
         let v = self.run(&["agent", "list"])?;
-        Ok(v["result"]["agents"].as_array().map(|l| l.iter().map(pane_from).collect()).unwrap_or_default())
+        let mut panes: Vec<Pane> = v["result"]["agents"].as_array().map(|l| l.iter().map(pane_from).collect()).unwrap_or_default();
+        // Swap the workspace id for its label; keep the id when the list fails.
+        if let Ok(w) = self.run(&["workspace", "list"]) {
+            for ws in w["result"]["workspaces"].as_array().into_iter().flatten() {
+                let (id, label) = (ws["workspace_id"].as_str().unwrap_or_default(), ws["label"].as_str().unwrap_or_default());
+                for p in panes.iter_mut().filter(|p| p.workspace == id && !label.is_empty()) {
+                    p.workspace = label.into();
+                }
+            }
+        }
+        Ok(panes)
     }
 
     fn prompt(&self, pane: &str, text: &str) -> std::result::Result<(), PromptError> {

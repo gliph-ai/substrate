@@ -124,6 +124,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .tag.ok { background: var(--teal-bg); color: var(--teal); }
 .tag.warn { background: #2A1E08; color: var(--amber); }
 .tag.bad { background: var(--red-bg); color: var(--red); }
+.tag.blue { background: #161E3D; color: #8FA8FF; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #52525B; display: inline-block; flex: none; }
 .dot.ok { background: var(--teal); } .dot.warn { background: var(--amber); } .dot.bad { background: var(--red); } .dot.blue { background: #8FA8FF; }
 .logo { width: 18px; height: 18px; vertical-align: -3px; }

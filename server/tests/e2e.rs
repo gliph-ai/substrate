@@ -145,7 +145,7 @@ async fn deliver(ws: &mut Ws) -> (String, String, String, String) {
 }
 
 fn pane(id: &str, session: &str, status: &str) -> Pane {
-    Pane { pane_id: id.into(), agent: "claude".into(), agent_session: session.into(), status: status.into(), cwd: "/work/verna".into(), title: "Verna".into() }
+    Pane { pane_id: id.into(), agent: "claude".into(), agent_session: session.into(), status: status.into(), cwd: "/work/verna".into(), title: "Verna".into(), ..Default::default() }
 }
 
 /// Owner with a paired machine, a project bound to pane w1:p1, a tester with

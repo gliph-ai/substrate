@@ -29,6 +29,9 @@ pub struct Pane {
     pub cwd: String,
     #[serde(default)]
     pub title: String,
+    /// The Herdr workspace label the pane sits in ("pushleft", "Tuli").
+    #[serde(default)]
+    pub workspace: String,
 }
 
 /// A project bound to a pane on this machine.
