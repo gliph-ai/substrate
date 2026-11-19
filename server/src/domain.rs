@@ -116,6 +116,18 @@ pub async fn role(app: &AppInner, pid: &str, account: &str) -> Result<Option<Str
         .bind(pid).bind(account).fetch_optional(&app.db).await?)
 }
 
+/// The deploy targets this account may ask for on a project: the owner any, a tester what
+/// the developer allowed.
+pub async fn deploy_targets(app: &AppInner, pid: &str, account: &str) -> Result<Vec<&'static str>, Fail> {
+    let row: Option<(String, bool, bool)> = sqlx::query_as("SELECT role, can_deploy_test, can_deploy_prod FROM members WHERE project_id=$1 AND account_id=$2")
+        .bind(pid).bind(account).fetch_optional(&app.db).await?;
+    Ok(match row {
+        Some((r, _, _)) if r == "owner" => vec!["test", "production"],
+        Some((_, t, p)) => [(t, "test"), (p, "production")].into_iter().filter(|x| x.0).map(|x| x.1).collect(),
+        None => vec![],
+    })
+}
+
 pub async fn require_owner(app: &AppInner, pid: &str, account: &str) -> Result<Project, Fail> {
     let p = project(app, pid).await?;
     if p.owner_id != account {
@@ -216,8 +228,8 @@ pub struct NewMessage<'a> {
     pub idem_key: &'a str,
     /// Already-validated attachment ids (uploaded by this sender, unattached).
     pub attachment_ids: &'a [String],
-    /// The chat's Auto deploy switch (see substrate_proto::EnvelopeInput::deploy).
-    pub deploy: Option<bool>,
+    /// The deploy asked for: "production", "test" or "none" (substrate_proto::EnvelopeInput::deploy).
+    pub deploy: Option<&'a str>,
 }
 
 pub const MESSAGE_TTL_DAYS: i64 = 7;
@@ -279,6 +291,11 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     };
     if names.len() != m.attachment_ids.len() {
         return Err(Fail::new(400, "an attachment is unknown, already used, or belongs to another project"));
+    }
+    if let Some(t) = m.deploy.filter(|t| *t != "none") {
+        if !deploy_targets(app, m.project_id, m.sender_id).await?.contains(&t) {
+            return Err(Fail::new(403, if t == "production" { "The developer has not allowed you to deploy to production." } else { "The developer has not allowed you to deploy to test." }));
+        }
     }
     let envelope = proto::envelope(&proto::EnvelopeInput {
         message_id: &mid, project_handle: &p.handle, project_path: &p.cwd, sender: &label,

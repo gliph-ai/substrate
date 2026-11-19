@@ -45,11 +45,7 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                         }
                         div.chat-banner.notice.warn #chat-banner hidden { span.ni { (ic("alert")) } div.nb #chat-banner-text {} }
                         div.chat-files #chat-files hidden {}
-                        div.chat-opts {
-                            label.switch title="On: the agent deploys the change when it is done. Off: it waits until you ask." {
-                                input #chat-deploy type="checkbox"; span.track {} "Auto deploy"
-                            }
-                        }
+                        div.chat-opts #chat-opts hidden {}
                         form.chat-compose #chat-form {
                             input #chat-file type="file" multiple hidden accept="image/png,image/jpeg,image/webp,application/pdf,text/plain";
                             button.btn.tertiary.icon #chat-attach type="button" aria-label="Attach files" { (ic("paperclip")) }

@@ -84,7 +84,7 @@ pub fn restrict(v: &mut Value, p: Perms) {
 /// Make a link: its hidden account, tester membership in each project, and
 /// the secret. Returns (link id, secret). Every project must be the owner's.
 #[allow(clippy::too_many_arguments)]
-pub async fn create(app: &AppInner, owner: &str, label: &str, projects: &[String], perms: Perms, auto: bool, days: i64) -> Result<(String, String), Fail> {
+pub async fn create(app: &AppInner, owner: &str, label: &str, projects: &[String], perms: Perms, auto: bool, deploy: (bool, bool), days: i64) -> Result<(String, String), Fail> {
     let label = substrate_proto::sanitize(label.trim(), 64);
     if label.is_empty() {
         return Err(Fail::new(400, "Give the link a name."));
@@ -108,8 +108,8 @@ pub async fn create(app: &AppInner, owner: &str, label: &str, projects: &[String
         .bind(&lid).bind(owner).bind(&acc).bind(&label).bind(perms.read).bind(perms.deploys).bind(perms.files).bind(auto).bind(exp)
         .execute(&mut *tx).await?;
     for pid in projects {
-        sqlx::query("INSERT INTO members (project_id, account_id, role, trusted_auto, invite_id) VALUES ($1,$2,'tester',$3,$4)")
-            .bind(pid).bind(&acc).bind(auto).bind(format!("link:{lid}")).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO members (project_id, account_id, role, trusted_auto, invite_id, can_deploy_test, can_deploy_prod) VALUES ($1,$2,'tester',$3,$4,$5,$6)")
+            .bind(pid).bind(&acc).bind(auto).bind(format!("link:{lid}")).bind(deploy.0).bind(deploy.1).execute(&mut *tx).await?;
     }
     let secret = token();
     sqlx::query("INSERT INTO tokens (hash, kind, account_id, ref, expires_at) VALUES ($1,'link',$2,$3,$4)")
@@ -133,6 +133,8 @@ pub async fn revoke(app: &AppInner, owner: &str, lid: &str) -> Result<(), Fail> 
 
 #[derive(sqlx::FromRow)]
 struct LinkRow {
+    deploy_test: bool,
+    deploy_prod: bool,
     id: String,
     label: String,
     can_read: bool,
@@ -147,6 +149,7 @@ struct LinkRow {
 pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let links = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
+                COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
          FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
          WHERE l.owner_id=$1 AND NOT l.revoked AND l.expires_at > now() GROUP BY l.id ORDER BY l.created_at DESC",
@@ -169,6 +172,8 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
                                     @if l.can_read { span.tag { "replies" } }
                                     @if l.can_deploys { span.tag { "deploys" } }
                                     @if l.can_files { span.tag { "files" } }
+                                    @if l.deploy_test { span.tag.blue { "deploys to test" } }
+                                    @if l.deploy_prod { span.tag.warn { "deploys to production" } }
                                     @if l.auto { span.tag.warn { "no approval" } }
                                 }
                             }
@@ -215,6 +220,8 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
                         label.row style="font-weight:400" { input type="checkbox" name="deploys" checked; "See CI and deploy progress and retest links" }
                         label.row style="font-weight:400" { input type="checkbox" name="files" checked; "Attach files and download the agent's files" }
                         label.row style="font-weight:400" { input type="checkbox" name="auto"; "Skip my approval (flagged messages still wait)" }
+                        label.row style="font-weight:400" { input type="checkbox" name="deploy_test"; "Ask the agent to deploy to test" }
+                        label.row style="font-weight:400" { input type="checkbox" name="deploy_prod"; "Ask the agent to deploy to production" }
                     }
                     div.field { label for="ld" { "Expires" } select id="ld" name="days" { option value="7" { "in 7 days" } option value="30" selected { "in 30 days" } option value="90" { "in 90 days" } option value="365" { "in a year" } } }
                     div.row { button.btn.primary type="submit" { (ic("link")) "Create link" } a.btn.tertiary href="/links" { "Cancel" } }
@@ -251,7 +258,7 @@ pub async fn create_post(State(app): State<App>, headers: HeaderMap, User(a): Us
     let on = |k: &str| f.contains_key(k);
     let days = f.get("days").and_then(|d| d.parse().ok()).unwrap_or(30);
     let label = f.get("label").cloned().unwrap_or_default();
-    match create(&app, &a.id, &label, &projects, Perms { read: on("read"), deploys: on("deploys"), files: on("files") }, on("auto"), days).await {
+    match create(&app, &a.id, &label, &projects, Perms { read: on("read"), deploys: on("deploys"), files: on("files") }, on("auto"), (on("deploy_test"), on("deploy_prod")), days).await {
         Ok((_, secret)) => Ok(created(&app, &a, label.trim(), &secret)),
         Err(Fail(_, msg)) => Ok(Redirect::to(&format!("/links/new?flash={}", urlencoding::encode(&msg))).into_response()),
     }

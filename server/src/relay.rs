@@ -478,6 +478,9 @@ pub fn deploy_line(d: &Value) -> String {
     let s = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let stage = s("stage");
     let mut line = match stage.as_str() {
+        "committing" => "Committing the change.".into(),
+        "running_checks" => "Running the tests and pre-commit hooks.".into(),
+        "pushing" => "Pushing.".into(),
         "fix_committed" => format!("Fix committed{}.", if s("commit").is_empty() { String::new() } else { format!(" ({})", s("commit")) }),
         "ci_running" => "CI is running.".into(),
         "ci_passed" => "CI passed.".into(),

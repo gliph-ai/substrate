@@ -600,7 +600,7 @@ async fn access_link_scopes_projects_and_permissions() {
 
     // Verna only; skip approval; no replies, no files.
     let p = format!("p_{}", w.pid);
-    let r = t.form(&w.dev, "/links", &[("label", "Sarah"), (p.as_str(), "on"), ("deploys", "on"), ("auto", "on"), ("days", "30")]).await;
+    let r = t.form(&w.dev, "/links", &[("label", "Sarah"), (p.as_str(), "on"), ("deploys", "on"), ("auto", "on"), ("deploy_test", "on"), ("days", "30")]).await;
     assert_eq!(r.status(), 200);
     let page = r.text().await.unwrap();
     let secret = page.split("/mcp/").nth(1).unwrap().split(['<', '"']).next().unwrap().to_string();
@@ -664,6 +664,19 @@ async fn access_link_scopes_projects_and_permissions() {
     let g = call("get_message", json!({"message_id": mid})).await;
     assert_eq!(g["structuredContent"]["stage"], "completed");
     assert!(!g.to_string().contains("Fixed the export button"), "{g}");
+
+    // Deploys: this link may ask for test, not production; the agent's prompt says which.
+    let ask = |deploy: &'static str| { let (http, url, pid) = (t.http.clone(), url.clone(), w.pid.clone()); async move {
+        let r: Value = http.post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "send_message",
+            "arguments": {"project_id": pid, "text": "ship the fix", "deploy": deploy, "send_anyway": true}}})).send().await.unwrap().json().await.unwrap();
+        r["result"].clone()
+    }};
+    let r = ask("production").await;
+    assert_eq!(r["isError"], true, "{r}");
+    let r = ask("test").await;
+    let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let env = domain::message(&t.app, &mid).await.unwrap().envelope;
+    assert!(env.contains("Deploy to test") && env.contains("Never deploy it to production"), "{env}");
 
     // The producer sees the link's use; revoking it stops it at once.
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();

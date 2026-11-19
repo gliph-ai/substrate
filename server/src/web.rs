@@ -607,8 +607,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
     let held: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='held'").bind(&pid).fetch_one(&app.db).await?;
     let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='completed'").bind(&pid).fetch_one(&app.db).await?;
     let deploying: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND deploy_stage IN ('fix_committed','ci_running','ci_passed','deploying')").bind(&pid).fetch_one(&app.db).await?;
-    let members: Vec<(String, String, String, String, bool)> = sqlx::query_as(
-        "SELECT a.id, a.email, a.name, m.role, m.trusted_auto FROM members m JOIN accounts a ON a.id=m.account_id WHERE m.project_id=$1 ORDER BY m.role, a.email",
+    let members: Vec<(String, String, String, String, bool, bool, bool)> = sqlx::query_as(
+        "SELECT a.id, a.email, a.name, m.role, m.trusted_auto, m.can_deploy_test, m.can_deploy_prod FROM members m JOIN accounts a ON a.id=m.account_id WHERE m.project_id=$1 ORDER BY m.role, a.email",
     ).bind(&pid).fetch_all(&app.db).await?;
     let invites: Vec<(String, String, i32, i32, DateTime<Utc>)> = sqlx::query_as(
         "SELECT id, label, uses, max_uses, expires_at FROM invites WHERE project_id=$1 AND NOT revoked AND expires_at > now() AND uses < max_uses ORDER BY created_at DESC",
@@ -700,19 +700,25 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                         section.card {
                             h3 { "Collaborators" }
                             div.stack {
-                                @for (aid, email, name, role, trusted) in &members {
+                                @for (aid, email, name, role, trusted, dtest, dprod) in &members {
                                     div.between {
                                         span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/links" { "access link" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
                                                 form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
+                                                @for (target, label, on) in [("test", "Test", *dtest), ("production", "Prod", *dprod)] {
+                                                    form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/deploy")) title=(format!("{} deploys to {target}", if on { "May ask for" } else { "May not ask for" })) {
+                                                        (csrf(&a)) input type="hidden" name="target" value=(target); input type="hidden" name="on" value=(if on { "0" } else { "1" });
+                                                        button.btn.small type="submit" { span class=(format!("tag {}", if on { "ok" } else { "off" })) { (label) } }
+                                                    }
+                                                }
                                                 form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
                                             }
                                         }
                                     }
                                 }
                             }
-                            span.faint style="font-size:12px" { "Messages from trusted testers skip approval. A ring marks them." }
+                            span.faint style="font-size:12px" { "Messages from trusted testers skip approval. A ring marks them. Test and Prod: what a tester may ask the agent to deploy to." }
                         }
                     }
                 }
@@ -874,6 +880,23 @@ pub async fn member_trust(State(app): State<App>, headers: HeaderMap, User(a): U
     let on = f.on == "1";
     sqlx::query("UPDATE members SET trusted_auto=$3 WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).bind(on).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), if on { "member.trusted" } else { "member.untrusted" }, &aid, "").await;
+    Ok(Redirect::to(&format!("/projects/{pid}")).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct DeployForm {
+    csrf: String,
+    target: String,
+    on: String,
+}
+
+pub async fn member_deploy(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, aid)): Path<(String, String)>, Form(f): Form<DeployForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let col = match f.target.as_str() { "test" => "can_deploy_test", "production" => "can_deploy_prod", _ => return Err(Fail::new(400, "target is test or production")) };
+    let on = f.on == "1";
+    sqlx::query(&format!("UPDATE members SET {col}=$3 WHERE project_id=$1 AND account_id=$2 AND role='tester'")).bind(&pid).bind(&aid).bind(on).execute(&app.db).await?;
+    audit(&app, &a.id, &pid, &a.label(), "member.deploy", &aid, &format!("{}={on}", f.target)).await;
     Ok(Redirect::to(&format!("/projects/{pid}")).into_response())
 }
 

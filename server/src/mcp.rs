@@ -57,7 +57,7 @@ fn all_tools() -> Value {
             "project_id": pid,
             "text": {"type": "string", "description": "The message, in the user's words. Plain text, up to 8000 characters."},
             "conversation_id": {"type": "string", "description": "Continue an existing conversation instead of starting a new one."},
-            "deploy": {"type": "boolean", "description": "true: the agent deploys the change the project's usual way when done. false: the agent does not deploy until asked. Leave it out to say neither."},
+            "deploy": {"type": "string", "enum": ["none", "test", "production"], "description": "Ask the agent to deploy the change when done, to test or to production, or (none) not to deploy until asked. Only the targets in the project's deploy_targets are allowed."},
             "send_anyway": {"type": "boolean", "description": "Send while the agent is offline. Set it only after the user agrees to wait."},
             "kind": {"type": "string", "enum": ["feedback", "question", "task"], "description": "feedback for bugs and impressions, question for questions, task for a requested change."},
             "attachments": {"type": "array", "maxItems": 5, "items": {"type": "object", "properties": {
@@ -212,8 +212,8 @@ fn agent_available(app: &AppInner, p: &Project) -> bool {
     app.machine_online(&p.machine_id) && !crate::web::agent_gone(&p.state)
 }
 
-fn project_json(app: &AppInner, p: &Project, role: &str, owner: &str) -> Value {
-    json!({"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
+fn project_json(app: &AppInner, p: &Project, role: &str, owner: &str, targets: &[&str]) -> Value {
+    json!({"deploy_targets": targets,"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
         "icon_url": if p.icon_etag.is_empty() { Value::Null } else { json!(format!("{}/projects/{}/icon?v={}", app.cfg.public_url, p.id, p.icon_etag)) },
         "agent": agent_label(&p.agent), "agent_online": agent_available(app, p),
         "agent_state": p.state, "your_role": role,
@@ -241,14 +241,16 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             for (pid, role) in rows {
                 let p = domain::project(app, &pid).await?;
                 let owner = domain::account_label(app, &p.owner_id).await;
-                out.push(project_json(app, &p, &role, &owner));
+                let t = domain::deploy_targets(app, &p.id, account).await?;
+                out.push(project_json(app, &p, &role, &owner, &t));
             }
             Ok(json!({"projects": out}))
         }
         "get_project" | "get_status" => {
             let (p, role) = member_project(app, account, s(a, "project_id")).await?;
             let owner = domain::account_label(app, &p.owner_id).await;
-            let mut v = project_json(app, &p, &role, &owner);
+            let t = domain::deploy_targets(app, &p.id, account).await?;
+            let mut v = project_json(app, &p, &role, &owner, &t);
             let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','approved','dispatched')")
                 .bind(&p.id).fetch_one(&app.db).await?;
             v["messages_waiting"] = json!(waiting);
@@ -281,7 +283,7 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             let m = domain::create_message(app, NewMessage {
                 project_id: &p.id, sender_id: account, sender_label: "", client_name: client,
                 conversation_id: a.get("conversation_id").and_then(|v| v.as_str()), kind, text: s(a, "text"),
-                idem_key: &idem, attachment_ids: &ids, deploy: a.get("deploy").and_then(|v| v.as_bool()),
+                idem_key: &idem, attachment_ids: &ids, deploy: a.get("deploy").and_then(|v| v.as_str()).filter(|d| matches!(*d, "none" | "test" | "production")),
             }).await?;
             domain::status_block(app, &m, 0, true).await
         }

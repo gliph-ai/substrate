@@ -180,6 +180,53 @@ document.addEventListener("submit", (e) => {
     return b;
   }
 
+  // Deploy: the targets the developer allowed this tester, remembered per project.
+  const depKey = () => "substrate.deploy." + S.pid;
+  function deployChoice() {
+    const t = (project() || {}).deploy_targets || [];
+    if (!t.length) return undefined;
+    let c = "none"; try { c = localStorage.getItem(depKey()) || "none"; } catch (e) {}
+    return c === "none" || t.includes(c) ? c : "none";
+  }
+  function deployOpts() {
+    const box = $("chat-opts"), t = (project() || {}).deploy_targets || [];
+    box.replaceChildren(); box.hidden = !t.length;
+    if (!t.length) return;
+    const seg = el("div", "seg"); seg.setAttribute("role", "radiogroup"); seg.setAttribute("aria-label", "Deploy");
+    seg.append(el("span", "seg-label", "Deploy"));
+    const cur = deployChoice();
+    for (const [v, label] of [["none", "Not yet"], ["test", "To test"], ["production", "To production"]]) {
+      if (v !== "none" && !t.includes(v)) continue;
+      const b = el("button", "seg-btn" + (v === cur ? " on" : "") + (v === "production" ? " prod" : ""), label);
+      b.type = "button"; b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(v === cur));
+      b.onclick = () => { try { localStorage.setItem(depKey(), v); } catch (e) {} deployOpts(); };
+      seg.append(b);
+    }
+    box.append(seg);
+  }
+
+  // The deploy track: one line of steps from the stage the agent and CI report.
+  const STEPS = ["Commit", "Checks", "Push", "CI", "Deploy", "Live"];
+  const AT = { committing: [0, "run"], running_checks: [1, "run"], pushing: [2, "run"], fix_committed: [3, "wait"], ci_running: [3, "run"],
+    ci_passed: [4, "wait"], ci_failed: [3, "fail"], deploying: [4, "run"], deployed: [5, "wait"], deploy_failed: [4, "fail"], verified: [6, "done"], ready_to_retest: [6, "done"] };
+  const dt = { el: null };
+  function deployTrack(stage, text) {
+    const log = $("chat-log");
+    if (!stage || !AT[stage]) { if (dt.el) dt.el.remove(); dt.el = null; return; }
+    const [at, how] = AT[stage];
+    if (!dt.el) dt.el = el("div", "deploy-track");
+    dt.el.replaceChildren();
+    STEPS.forEach((s, i) => {
+      const state = i < at ? "done" : i === at ? how : "todo";
+      const step = el("span", "step " + state);
+      step.append(el("span", "mark", state === "done" ? "✓" : state === "fail" ? "✕" : state === "run" ? "✻" : "·"), s);
+      dt.el.append(step);
+      if (i < STEPS.length - 1) dt.el.append(el("span", "sep", "›"));
+    });
+    if (text) dt.el.append(el("span", "dt-note", text));
+    log.append(dt.el);
+  }
+
   const project = () => S.projects.find((p) => p.project_id === S.pid);
   // The developer by name: "waseem" -> "Waseem". Server notes say "the developer".
   const dev = () => { const d = (project() || {}).developer || ""; return d ? d.charAt(0).toUpperCase() + d.slice(1) : "the developer"; };
@@ -235,6 +282,7 @@ document.addEventListener("submit", (e) => {
     const ban = $("chat-banner"), btn = $("chat-send").querySelector("span");
     if (available(p)) { ban.hidden = true; btn.textContent = S.next === "answer_question" ? "Answer" : "Send"; }
     else { ban.hidden = false; $("chat-banner-text").textContent = "The agent is offline. A message waits until " + dev() + " starts it again."; btn.textContent = "Send anyway"; }
+    deployOpts();
     $("chat-text").placeholder = S.next === "answer_question" ? "Answer the agent's question" : "Message " + (p.agent || "the agent");
   }
 
@@ -251,7 +299,7 @@ document.addEventListener("submit", (e) => {
         const who = el("div", "who"), lg = agentLogo(e.name); if (lg) who.append(lg);
         who.append(e.name + (e.kind === "question" ? " asks" : ""));
         n.append(who, rich(e.agent_text), files(e.attachments));
-      } else if (e.actor === "deploy") n = el("div", "note", "Deploy: " + (e.agent_text || ""));
+      } else if (e.actor === "deploy") { S.deployText = e.agent_text || ""; continue; }
       else if (e.kind === "stage") { S.stageText = named(e.text); continue; }
       else n = el("div", "note", named(e.text || e.kind));
       log.append(n);
@@ -265,6 +313,7 @@ document.addEventListener("submit", (e) => {
     add(b.new_events); S.seq = Math.max(S.seq, b.seq || 0);
     const asked = b.next_action === "answer_question";
     status(asked ? "Waiting for your answer." : (S.stageText || named(b.summary)), !b.terminal && !asked, b.stage === "working");
+    deployTrack(b.deployment_stage, S.deployText);
     head(b.summary);
   }
 
@@ -280,7 +329,7 @@ document.addEventListener("submit", (e) => {
   }
 
   function fresh() {
-    S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set(); S.stageText = ""; st.text = "";
+    S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set(); S.stageText = ""; S.deployText = ""; st.text = ""; dt.el = null;
     history.replaceState(null, "", location.pathname);
     const log = $("chat-log"), e = el("div", "chat-empty");
     const p = project(), big = p ? icon(p) : null;
@@ -292,7 +341,7 @@ document.addEventListener("submit", (e) => {
   }
 
   async function open(cid) {
-    S.gen++; S.seen = new Set(); S.seq = 0; S.stageText = ""; st.text = ""; $("chat-log").replaceChildren();
+    S.gen++; S.seen = new Set(); S.seq = 0; S.stageText = ""; S.deployText = ""; st.text = ""; dt.el = null; $("chat-log").replaceChildren();
     try {
       const c = await call("get_conversation", { conversation_id: cid });
       const p = S.projects.find((x) => x.name === c.project); if (p) S.pid = p.project_id;
@@ -341,11 +390,6 @@ document.addEventListener("submit", (e) => {
     new EventSource(live).onmessage = () => reload().catch(() => {});
   }
 
-  // Auto deploy: remembered per browser; it changes the instruction in each message.
-  const dep = $("chat-deploy");
-  try { dep.checked = localStorage.getItem("substrate.autodeploy") === "1"; } catch (e) {}
-  dep.onchange = () => { try { localStorage.setItem("substrate.autodeploy", dep.checked ? "1" : "0"); } catch (e) {} };
-
   $("chat-new").onclick = fresh;
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });
@@ -357,7 +401,7 @@ document.addEventListener("submit", (e) => {
     try {
       const b = S.next === "answer_question"
         ? await call("reply", { message_id: S.mid, text })
-        : await call("send_message", { project_id: S.pid, text: text || "(files attached)", conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID(), deploy: $("chat-deploy").checked,
+        : await call("send_message", { project_id: S.pid, text: text || "(files attached)", conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID(), deploy: deployChoice(),
             attachments: pending.length ? await Promise.all(pending.map(async (f) => ({ name: f.name, data_base64: await b64(f) }))) : undefined });
       ta.value = ""; ta.style.height = "auto"; pending.length = 0; chips();
       block(b); watch(); reload();
