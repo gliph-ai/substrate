@@ -43,6 +43,7 @@ static STATIC: &[(&str, &str, &[u8])] = &[
     ("logos/github-actions.svg", "image/svg+xml", include_bytes!("../static/logos/github-actions.svg")),
     ("logos/gitlab.svg", "image/svg+xml", include_bytes!("../static/logos/gitlab.svg")),
     ("logos/gliph.png", "image/png", include_bytes!("../static/logos/gliph.png")),
+    ("logos/substrate.png", "image/png", include_bytes!("../static/logos/substrate.png")),
 ];
 
 /// A short hash of the stylesheet and script, put in their URLs so a deploy

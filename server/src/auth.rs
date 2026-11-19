@@ -147,10 +147,15 @@ pub async fn login_post(State(app): State<App>, headers: HeaderMap, Form(f): For
         .bind(hash(&t)).bind(&email).bind(safe_next(&f.next)).bind(now() + Duration::minutes(15))
         .execute(&app.db).await?;
     let link = format!("{}/auth/magic?t={t}", app.cfg.public_url);
-    let body = format!(
-        "Sign in to Substrate:\n\n{link}\n\nThe link works once and expires in 15 minutes.\nDidn't ask for it? Ignore this email.\n"
-    );
-    if let Err(e) = app.mail.send(&email, "Your Substrate sign-in link", &body).await {
+    let msg = crate::mail::Message {
+        subject: "Your Substrate sign-in link",
+        title: "Sign in to Substrate",
+        intro: "The button works once and expires in 15 minutes.",
+        button: "Sign in",
+        url: &link,
+        note: "Didn't ask for it? Ignore this email.",
+    };
+    if let Err(e) = app.mail.send(&email, &msg).await {
         tracing::error!(error = %e, "magic link mail");
         return Ok(web::login_page(&app, &f.next, Some("We couldn't send the email. Try again in a minute.")).into_response());
     }
