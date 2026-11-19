@@ -25,10 +25,15 @@ pub struct Message<'a> {
     pub button: &'a str,
     pub url: &'a str,
     pub note: &'a str,
+    /// A one-time code to type (Sidra's sign-in), shown big instead of a button when set.
+    pub code: &'a str,
 }
 
 impl Message<'_> {
     pub fn text(&self) -> String {
+        if !self.code.is_empty() {
+            return format!("{}\n\n{}\n\n{}\n\n{}\n", self.title, self.intro, self.code, self.note);
+        }
         format!("{}\n\n{}\n\n{}: {}\n\n{}\n", self.title, self.intro, self.button, self.url, self.note)
     }
 
@@ -46,15 +51,21 @@ impl Message<'_> {
                             } }
                             tr { td style="padding:20px 36px 0;font-size:24px;line-height:30px;font-weight:600;color:#09090B;letter-spacing:-0.3px" { (self.title) } }
                             tr { td style="padding:10px 36px 0;font-size:15px;line-height:23px;color:#52525B" { (self.intro) } }
-                            tr { td style="padding:28px 36px 0" {
-                                table role="presentation" cellpadding="0" cellspacing="0" { tr { td bgcolor="#09090B" style="border-radius:10px" {
-                                    a href=(self.url) style="display:inline-block;padding:13px 26px;font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:10px" { (self.button) }
-                                } } }
-                            } }
-                            tr { td style="padding:28px 36px 0;font-size:13px;line-height:20px;color:#71717A" {
-                                "Button not working? Paste this link into your browser:" br;
-                                a href=(self.url) style="color:#4F46E5;word-break:break-all" { (self.url) }
-                            } }
+                            @if !self.code.is_empty() {
+                                tr { td style="padding:24px 36px 0" {
+                                    div style="display:inline-block;padding:14px 22px;border-radius:12px;background:#F4F4F5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:32px;letter-spacing:10px;font-weight:700;color:#09090B" { (self.code) }
+                                } }
+                            } @else {
+                                tr { td style="padding:28px 36px 0" {
+                                    table role="presentation" cellpadding="0" cellspacing="0" { tr { td bgcolor="#09090B" style="border-radius:10px" {
+                                        a href=(self.url) style="display:inline-block;padding:13px 26px;font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:10px" { (self.button) }
+                                    } } }
+                                } }
+                                tr { td style="padding:28px 36px 0;font-size:13px;line-height:20px;color:#71717A" {
+                                    "Button not working? Paste this link into your browser:" br;
+                                    a href=(self.url) style="color:#4F46E5;word-break:break-all" { (self.url) }
+                                } }
+                            }
                             tr { td style="padding:20px 36px 36px;font-size:13px;line-height:20px;color:#71717A" { (self.note) } }
                         }
                         table role="presentation" width="100%" cellpadding="0" cellspacing="0" style=(format!("max-width:480px;{font}")) {
@@ -123,13 +134,13 @@ mod tests {
 
     #[test]
     fn html_and_text_carry_the_link() {
-        let m = Message { subject: "s", title: "Sign in", intro: "i", button: "Go", url: "https://x.test/a?t=1&n=<b>", note: "n" };
+        let m = Message { subject: "s", title: "Sign in", intro: "i", button: "Go", url: "https://x.test/a?t=1&n=<b>", note: "n", code: "" };
         let h = m.html("https://x.test");
         assert!(h.contains("href=\"https://x.test/a?t=1&amp;n=&lt;b&gt;\""), "{h}");
         assert!(!h.contains("<b>"));
         assert!(m.text().contains("Go: https://x.test/a?t=1&n=<b>"));
         if let Ok(p) = std::env::var("MAIL_PREVIEW") {
-            let real = Message { subject: "Your Substrate sign-in link", title: "Sign in to Substrate", intro: "The button works once and expires in 15 minutes.", button: "Sign in", url: "https://substrate.gliph.sh/auth/magic?t=076844d22b324ad0f44da55f02f5a3ea3a0f6532d7c71116adccea0718a98b09", note: "Didn't ask for it? Ignore this email." };
+            let real = Message { subject: "Your Substrate sign-in link", title: "Sign in to Substrate", intro: "The button works once and expires in 15 minutes.", button: "Sign in", url: "https://substrate.gliph.sh/auth/magic?t=076844d22b324ad0f44da55f02f5a3ea3a0f6532d7c71116adccea0718a98b09", note: "Didn't ask for it? Ignore this email.", code: "" };
             std::fs::write(p, real.html("http://localhost:8790")).unwrap();
         }
     }

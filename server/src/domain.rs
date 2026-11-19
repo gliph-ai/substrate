@@ -160,6 +160,10 @@ pub async fn add_event(
         .execute(&mut *tx).await?;
     tx.commit().await?;
     app.wake(conv, seq);
+    // The owner's pages and apps (Sidra's badge) refresh on every event.
+    if let Ok(Some(owner)) = sqlx::query_scalar::<_, String>("SELECT p.owner_id FROM conversations c JOIN projects p ON p.id=c.project_id WHERE c.id=$1").bind(conv).fetch_optional(&app.db).await {
+        app.changed(&owner);
+    }
     if !held {
         mirror(app, conv, actor_kind, actor_name, kind, text, &data).await;
     }
@@ -341,7 +345,6 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let via = if m.client_name.is_empty() { String::new() } else { format!(" via {}", m.client_name) };
     add_event(app, &conv, &mid, "human", &label, m.kind, &text,
         json!({"message_id": mid, "client": m.client_name, "attachments": names}), false).await?;
-    app.changed(&p.owner_id); // Approvals and the dashboard refresh
 
     let (sys, detail) = match stage {
         "held" => (format!("Held for the developer. It matched {}. The agent has not received it.", flags.join(", ")), "held"),

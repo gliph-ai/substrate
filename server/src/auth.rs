@@ -154,6 +154,7 @@ pub async fn login_post(State(app): State<App>, headers: HeaderMap, Form(f): For
         button: "Sign in",
         url: &link,
         note: "Didn't ask for it? Ignore this email.",
+        code: "",
     };
     if let Err(e) = app.mail.send(&email, &msg).await {
         tracing::error!(error = %e, "magic link mail");

@@ -7,6 +7,7 @@ pub mod aws;
 pub mod domain;
 pub mod files;
 pub mod gliph;
+pub mod appapi;
 pub mod chat;
 pub mod sing;
 pub mod links;
@@ -129,6 +130,17 @@ pub fn router(app: App) -> Router {
         // MCP + OAuth
         .route("/mcp", get(mcp::get).post(mcp::post))
         .route("/mcp/{secret}", get(chat::link_page).post(mcp::post_link))
+        .route("/api/v1/auth/code", post(appapi::auth_code))
+        .route("/api/v1/auth/verify", post(appapi::auth_verify))
+        .route("/api/v1/auth/logout", post(appapi::auth_logout))
+        .route("/api/v1/me", get(appapi::me))
+        .route("/api/v1/dashboard", get(appapi::dashboard))
+        .route("/api/v1/messages/{mid}/{action}", post(appapi::decide))
+        .route("/api/v1/conversations/{cid}", get(appapi::conversation))
+        .route("/api/v1/sessions", get(appapi::sessions))
+        .route("/api/v1/sessions/{sid}", get(appapi::session))
+        .route("/api/v1/machines", get(appapi::machines))
+        .route("/api/v1/live", get(appapi::live))
         .route("/chat", get(chat::page))
         .route("/chat/live", get(chat::live))
         .route("/mcp/{secret}/live", get(chat::link_live))

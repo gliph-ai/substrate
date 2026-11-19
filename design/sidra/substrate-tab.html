@@ -1,0 +1,183 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="sidra.css">
+<script src="shell.js"></script><script src="herdr.js"></script>
+<style>
+:root{--el:linear-gradient(135deg,#3B5BFF,#7B2CFF 60%,#C04BFF);--elg:0 0 0 1px #8F7BFF55,0 4px 18px #5B3BFF55}
+.body{flex:1;display:flex;padding:4px 14px 14px;min-height:0}
+.pane.focus{border:1px solid transparent;background:linear-gradient(#12151a,#12151a) padding-box,var(--grad) border-box;box-shadow:none}
+.ph{display:flex;align-items:center;gap:10px;height:46px;padding:0 14px;border-bottom:1px solid var(--line);font-size:13.5px;flex:none}
+.ph .pj{color:var(--muted)}
+.sq{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:none;background:var(--el)}
+.sq img{width:16px;height:16px;border-radius:4px}
+.wtab.on{border:1px solid transparent;background:linear-gradient(#222831,#222831) padding-box,var(--grad) border-box}
+.cnt{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#0b0d10;border:1px solid var(--line2);font:600 10.5px var(--mono);color:var(--text);display:inline-grid;place-items:center}
+.cnt.hot{background:var(--el);border-color:transparent;color:#fff;box-shadow:0 0 10px #7B2CFF88}
+.seg{display:flex;padding:3px;gap:2px;border-radius:10px;background:#0f1216;border:1px solid var(--line);margin-left:14px}
+.seg span{height:26px;display:flex;align-items:center;gap:6px;padding:0 11px;border-radius:7px;font-size:12.5px;color:var(--muted)}
+.seg span.on{color:#fff;font-weight:650;background:var(--el);box-shadow:var(--elg)}
+.pl{display:flex;flex:1;min-height:0}
+.side{width:360px;border-right:1px solid var(--line);overflow:hidden;padding:6px 0;background:#101318;flex:none}
+.grp{display:flex;align-items:center;gap:8px;padding:12px 14px 6px;font-size:11.5px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;font-weight:650}
+.grp .n{margin-left:auto;font-weight:500}
+.row{display:flex;align-items:center;gap:10px;min-height:52px;padding:6px 14px;position:relative}
+.row.on{background:#1c2129}
+.row.on::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:2px;border-radius:2px 2px 0 0;background:var(--grad)}
+.row .t{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.row .t b{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t span{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .ago{font-size:11.5px;color:var(--muted);flex:none}
+.av{width:30px;height:30px;border-radius:50%;flex:none;display:grid;place-items:center;font:700 12px var(--ui);color:#fff;background:#2a2f55;position:relative}
+.av .pb{position:absolute;right:-4px;bottom:-4px;border-radius:5px;box-shadow:0 0 0 2px #101318}
+.av.me{background:linear-gradient(135deg,#c08457,#7a4b2a)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:#0f1216;overflow:hidden}
+.head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);flex:none}
+.head b{font-size:15px;font-weight:650}
+.chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:7px;background:#1b2028;border:1px solid var(--line);font-size:12px;color:#aab2bd;white-space:nowrap}
+.chip b{color:var(--text);font-weight:650}
+.chip.warn{color:var(--accent2);background:#231f15;border-color:rgba(232,196,106,.25)}
+.chip.el{color:#fff;border-color:transparent;background:var(--el)}
+.chip .d{width:7px;height:7px;border-radius:50%}
+.msg{margin:16px 18px 0;padding:14px 16px;border-radius:14px;background:#161a20;border:1px solid var(--line);font-size:14.5px;line-height:1.5}
+.msg .who{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-bottom:8px}
+.msg .who b{color:var(--text)}
+.prompt{margin:10px 18px 0;padding:10px 14px;border-radius:10px;background:#0b0d10;border:1px solid var(--line);font:12px/1.6 var(--mono);color:#8b93a0;white-space:pre-wrap;max-height:122px;overflow:hidden;position:relative}
+.prompt .u{color:#e6e9ee}
+.prompt::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,#0b0d10)}
+.acts{display:flex;gap:8px;margin:14px 18px 0}
+.bt{height:34px;display:inline-flex;align-items:center;gap:7px;padding:0 15px;border-radius:9px;font-size:13px;font-weight:650;border:1px solid var(--line2);color:var(--text);background:#1b2028}
+.bt.go{border-color:transparent;color:#fff;background:var(--el);box-shadow:var(--elg),inset 0 1px 0 #ffffff33}
+.bt.ghost{background:transparent;color:var(--muted);border-color:transparent;font-style:normal}
+.kh{font:600 10.5px var(--mono);padding:1px 5px;border-radius:5px;background:#ffffff1f;color:inherit;margin-left:2px}
+.tl{flex:1;overflow:hidden;padding:14px 18px 0;display:flex;flex-direction:column;gap:6px}
+.tl h4{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:650;margin:4px 0 4px}
+.ln2{display:flex;align-items:center;gap:9px;font-size:12.5px;color:#aab2bd;min-height:26px}
+.ln2 .m{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:#1b2028;flex:none}
+.ln2 .tm{margin-left:auto;color:var(--dim);font:11.5px var(--mono)}
+.track{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);margin:2px 0 6px}
+.track .s{display:inline-flex;align-items:center;gap:5px}
+.track .k{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:#1b2028;font-size:11px}
+.track .s.done{color:var(--accent)}.track .s.done .k{background:rgba(90,214,160,.14)}
+.track .s.run{color:var(--text)}.track .s.run .k{background:var(--el);color:#fff;box-shadow:var(--elg)}
+.keys{display:flex;gap:6px;padding:8px 14px;border-top:1px solid var(--line);flex:none}
+.stats{display:flex;gap:10px;margin:14px 18px 0}
+.stat{flex:1;padding:12px 14px;border-radius:12px;background:#161a20;border:1px solid var(--line)}
+.stat .k2{font-size:11.5px;color:var(--muted)}
+.stat .v{font-size:24px;font-weight:600;margin-top:4px}
+.stat .v.el{background:var(--el);-webkit-background-clip:text;color:transparent}
+.strip{display:flex;gap:6px;flex-wrap:wrap}
+.mini{position:relative;display:inline-flex}
+.mini .am{position:absolute;right:-5px;bottom:-5px;width:15px;height:15px;border-radius:50%;background:#101318;display:grid;place-items:center}
+@keyframes cs{to{transform:rotate(360deg)}}
+.spinc{animation:cs 1.6s linear infinite}
+.signin{flex:1;display:grid;place-items:center;background:radial-gradient(ellipse 55% 50% at 50% 38%,#0E1A6B 0%,#070A2A 45%,#0f1216 80%)}
+.card{width:440px;padding:28px;border-radius:18px;background:#14181e;border:1px solid var(--line2);box-shadow:0 30px 80px #000a;text-align:center}
+.orb{width:84px;height:84px;margin:0 auto 18px;border-radius:50%;background:conic-gradient(from 180deg at 55% 60%,#05061A 0deg,#0B1BFF 60deg,#05061A 120deg,#C04BFF 200deg,#05061A 260deg,#7FF0FF 320deg,#05061A 360deg);box-shadow:0 0 40px #5B3BFF88}
+.card h2{font-size:22px;font-weight:650;margin-bottom:6px}
+.card p{font-size:13px;color:var(--muted);margin-bottom:18px;line-height:1.5}
+.in{height:40px;border-radius:10px;background:#0b0d10;border:1px solid var(--line2);display:flex;align-items:center;padding:0 12px;font-size:14px;color:var(--text);text-align:left;margin-bottom:12px}
+.code{display:flex;gap:8px;justify-content:center;margin:4px 0 16px}
+.code i{width:46px;height:54px;border-radius:10px;background:#0b0d10;border:1px solid var(--line2);display:grid;place-items:center;font:600 22px var(--mono);font-style:normal}
+.code i.f{border:1px solid transparent;background:linear-gradient(#0b0d10,#0b0d10) padding-box,var(--el) border-box}
+.note{font-size:12px;color:var(--dim);margin-top:14px}
+.ann{position:absolute;font:600 11.5px var(--ui);color:#fff;background:#7B2CFF;padding:4px 8px;border-radius:7px;box-shadow:0 6px 20px #0008;z-index:9}
+.ann::before{content:"";position:absolute;width:8px;height:8px;background:#7B2CFF;transform:rotate(45deg)}
+.ann.up::before{top:-4px;left:14px}.ann.down::before{bottom:-4px;left:14px}.ann.left::before{left:-4px;top:9px}
+</style></head><body>
+<div class="ipad" id="app" style="position:relative"></div>
+<script>
+document.head.insertAdjacentHTML('beforeend',HCSS);
+const v = +(new URLSearchParams(location.search).get('v')||1);
+const SUB = (s=24) => `<span class="sq" style="width:${s}px;height:${s}px"><img src="brand/substrate.png" style="width:${Math.round(s*.66)}px;height:${Math.round(s*.66)}px"></span>`;
+const av = (l, cls='', pb='') => `<span class="av ${cls}" style="${cls?'':''}">${l}${pb?`<span class="pb">${plogo(pb,14)}</span>`:''}</span>`;
+const claude = (s=14, spin) => `<img src="brand/claude.svg" class="${spin?'spinc':''}" style="width:${s}px;height:${s}px">`;
+const CHECK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const X = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+const EXT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 4h6v6M10 14 20 4M20 14v6H4V4h6"/></svg>';
+const waiting = v===3 ? 0 : 2;
+
+const tabs = `<div class="wtabs">
+  <div class="wtab">${mark('herdr',24)}herdr <span class="sub">mac</span>${waiting?`<span title="an agent here has a request waiting" style="margin-left:2px">${SUB(16)}</span>`:''}</div>
+  <div class="wtab"><span class="pq" style="width:24px;height:24px;border-radius:7px;background:#f28cb8;display:grid;place-items:center;color:#14161a;font-weight:800">⑂</span>Pipelines <span class="sub">gitlab</span></div>
+  <div class="wtab on">${SUB(24)}Substrate <span class="sub">substrate.gliph.sh</span>${waiting?`<span class="cnt hot">${waiting}</span>`:''}</div>
+</div>`;
+const bar = `<div class="titlebar">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <div class="host"><span class="hi">${I.term}</span><div><div class="n1">alexei</div><div class="n2">Mac</div></div></div>
+  ${tabs}<div class="sp"></div>
+  ${waiting?`<span class="hchip st-blocked" style="height:28px">${SUB(14)}Substrate · <b style="color:var(--accent2)">${waiting}</b> waiting</span>`:''}
+  <span class="hchip" style="height:28px">${spin(10)}<b>4</b> working <span style="color:var(--dim)">▾</span></span>
+  <div class="icon">${I.plus.replace(/14/g,"18")}</div>
+</div>`;
+const segs = (on) => `<div class="seg">${['Requests','Sessions','Machines'].map(s=>`<span class="${s===on?'on':''}">${s}${s==='Requests'&&waiting?` <span class="cnt" style="height:16px;min-width:16px;font-size:10px;${s===on?'background:#ffffff33;border-color:transparent;color:#fff':''}">${waiting}</span>`:''}</span>`).join('')}</div>`;
+const ph = (on) => `<div class="ph">${SUB(20)}<span><b>Substrate</b> <span class="pj">| waseem</span></span>${on?segs(on):''}<div class="sp"></div>${on?`<span class="chip">New session ${EXT}</span>`:''}${CTL}</div>`;
+
+let inner = '';
+if (v===1) {
+  const side = `<div class="side">
+    <div class="grp"><span class="d" style="width:8px;height:8px;border-radius:2px;background:var(--accent2)"></span>Needs you<span class="n">2</span></div>
+    <div class="row on">${av('U','')}<div class="t"><b>The reel in this social post isn't showing</b><span style="display:flex;align-items:center;gap:5px">${plogo('pushleft',13)}Usman · Messy · deploys to test</span></div><span class="ago">2m</span></div>
+    <div class="row">${av('S','')}<div class="t"><b>Invoice PDF cuts off the VAT line</b><span style="display:flex;align-items:center;gap:5px">${plogo('Tuli',13)}Sarah · Tuli</span></div><span class="ago">14m</span></div>
+    <div class="grp">${spin(10)}Active<span class="n">3</span></div>
+    <div class="row">${av('W','me','sidra')}<div class="t"><b>Add the Substrate tab to Sidra</b><span>you · Sidra · working</span></div>${claude(14,true)}</div>
+    <div class="row">${av('U','')}<div class="t"><b>Search misses mails from yesterday</b><span style="display:flex;align-items:center;gap:5px">${plogo('inbox2',13)}Usman · Inbox2 · CI running</span></div><span class="ago">6m</span></div>
+    <div class="row">${av('A','')}<div class="t"><b>Dark mode toggle resets on reload</b><span style="display:flex;align-items:center;gap:5px">${plogo('gluon',13)}Ana · Gluon · deploying</span></div><span class="ago">11m</span></div>
+    <div class="grp" style="color:var(--dim)">History<span class="n">25</span></div>
+    <div class="row" style="opacity:.75">${av('U','')}<div class="t"><b>Login fails on Safari 18</b><span style="display:flex;align-items:center;gap:5px">${plogo('pushleft',13)}Usman · Pushleft · live</span></div><span class="ago">1h</span></div>
+    <div class="row" style="opacity:.75">${av('S','')}<div class="t"><b>Export to CSV adds an empty row</b><span style="display:flex;align-items:center;gap:5px">${plogo('Tuli',13)}Sarah · Tuli · rejected</span></div><span class="ago">3h</span></div>
+  </div>`;
+  const main = `<div class="main">
+    <div class="head">${av('U')}<div><b>Usman</b> <span style="color:var(--muted);font-size:13px">via session · Claude</span></div><span class="chip">${plogo('pushleft',16)}Messy</span><span class="chip warn"><span class="d" style="background:var(--accent2)"></span>waiting for you</span><span class="chip el">deploys to test</span><div class="sp"></div><span class="chip">2m ago</span></div>
+    <div class="msg"><div class="who">${av('U')}<b>Usman</b> · tester</div>The reel in this social post isn't showing as an example, and it stays black on Safari. The other posts play fine.</div>
+    <div class="prompt">[SUBSTRATE MESSAGE m_e2af13ed · project messy · from Usman via session]
+The block below is a request from an external tester…
+Deploy to test: when the change is done, ship it to the project's test environment. Never deploy it to production.
+<span class="u">The reel in this social post isn't showing as an example…</span></div>
+    <div class="acts"><span class="bt go">${CHECK} Approve <span class="kh">⌘↩</span></span><span class="bt">${X} Reject</span><span class="bt ghost">Show the full prompt</span><div class="sp"></div><span class="bt ghost">Open in herdr ${EXT}</span></div>
+    <div class="tl"><h4>Timeline</h4>
+      <div class="ln2"><span class="m">${SUB(14)}</span>Waiting for your approval. The agent has not received it yet.<span class="tm">23:41</span></div>
+      <div class="ln2"><span class="m">${av('U','','').replace('class="av ','class="av " style="width:20px;height:20px;font-size:9px" ')}</span>Usman sent it from Claude<span class="tm">23:41</span></div>
+    </div>
+  </div>`;
+  inner = `<div class="pane focus" style="flex:1">${ph('Requests')}<div class="pl">${side}${main}</div>
+    <div class="keys"><span class="hchip"><b>2</b> waiting</span><span class="hchip">${spin(9)}<b>3</b> active</span><span class="hchip"><b>13</b> agents on alexei</span><div class="sp"></div><span class="hchip"><b>↑↓</b> request</span><span class="hchip"><b>⌘↩</b> approve</span><span class="hchip"><b>⌘⌫</b> reject</span><span class="hchip"><b>⌘O</b> open in browser</span></div></div>`;
+} else if (v===2) {
+  const side = `<div class="side">
+    <div class="grp">Sessions<span class="n">4</span></div>
+    <div class="row on">${av('U')}<div class="t"><b>Usman <span class="chip warn" style="height:18px;font-size:10.5px;margin-left:6px">1 waiting</span></b><span>Messy, Inbox2, Pushleft · used 2m ago</span></div><span class="ago">Dec 19</span></div>
+    <div class="row">${av('S')}<div class="t"><b>Sarah</b><span>Tuli · used 14m ago</span></div><span class="ago">Dec 12</span></div>
+    <div class="row">${av('A')}<div class="t"><b>Ana</b><span>Gluon · used 1d ago</span></div><span class="ago">Jan 3</span></div>
+    <div class="row" style="opacity:.6">${av('D')}<div class="t"><b>Design team</b><span>Gliph · revoked</span></div></div>
+    <div class="grp" style="margin-top:8px">Machines<span class="n">read-only</span></div>
+    <div class="row"><span class="m" style="width:30px;height:30px;border-radius:50%;background:#1b2028;display:grid;place-items:center">${I.term}</span><div class="t"><b><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px"></span>alexei</b>
+      <span class="strip" style="margin-top:4px">${['pushleft','Tuli','sidra','gluon','inbox2'].map((p,i)=>`<span class="mini">${plogo(p,20)}<span class="am">${claude(10, i===0||i===2)}</span></span>`).join('')}<span style="color:var(--dim);font-size:11px;align-self:center">+8</span></span></div></div>
+  </div>`;
+  const main = `<div class="main">
+    <div class="head">${av('U')}<b>Usman</b><span class="chip">replies</span><span class="chip">deploys</span><span class="chip">files</span><span class="chip el">deploys to test</span><div class="sp"></div><span class="chip">Revoke and edit in the browser ${EXT}</span></div>
+    <div class="stats">
+      <div class="stat"><div class="k2">Messages</div><div class="v">7</div></div>
+      <div class="stat"><div class="k2">Waiting for you</div><div class="v" style="color:var(--accent2)">1</div></div>
+      <div class="stat"><div class="k2">With the agent</div><div class="v">1</div></div>
+      <div class="stat"><div class="k2">Completed</div><div class="v el">5</div></div>
+      <div class="stat"><div class="k2">Deployed</div><div class="v">3</div></div>
+    </div>
+    <div class="tl"><h4>History</h4>
+      <div class="ln2" style="color:var(--text);font-size:13.5px">${plogo('inbox2',18)}<b style="font-weight:600">Search misses mails from yesterday</b><span class="tm">6m</span></div>
+      <div class="track"><span class="s done"><span class="k">✓</span>Commit</span>›<span class="s done"><span class="k">✓</span>Checks</span>›<span class="s done"><span class="k">✓</span>Push</span>›<span class="s run"><span class="k">⚙</span>CI</span>›<span class="s"><span class="k">🚀</span>Deploy</span>›<span class="s"><span class="k">◎</span>Live</span></div>
+      <div class="ln2"><span class="m">${claude(12,true)}</span>Claude Code: fixed the date filter in the IMAP search; CI is running.<span class="tm">23:38</span></div>
+      <div class="ln2"><span class="m" style="background:var(--el)">${CHECK.replace('currentColor','#fff')}</span>Approved by you<span class="tm">23:31</span></div>
+      <div class="ln2" style="color:var(--text);font-size:13.5px;margin-top:10px">${plogo('pushleft',18)}<b style="font-weight:600">Login fails on Safari 18</b><span class="tm">1h</span></div>
+      <div class="track"><span class="s done"><span class="k">✓</span>Commit</span>›<span class="s done"><span class="k">✓</span>Checks</span>›<span class="s done"><span class="k">✓</span>Push</span>›<span class="s done"><span class="k">✓</span>CI</span>›<span class="s done"><span class="k">✓</span>Deploy</span>›<span class="s done"><span class="k">✓</span>Live</span></div>
+    </div>
+  </div>`;
+  inner = `<div class="pane focus" style="flex:1">${ph('Sessions')}<div class="pl">${side}${main}</div>
+    <div class="keys"><span class="hchip"><b>4</b> sessions</span><span class="hchip"><b>1</b> waiting</span><div class="sp"></div><span class="hchip"><b>↑↓</b> session</span><span class="hchip"><b>⌘N</b> new session in the browser</span></div></div>`;
+} else {
+  inner = `<div class="pane focus" style="flex:1">${ph('')}<div class="signin"><div class="card">
+    <div class="orb"></div><h2>Sign in to Substrate</h2><p>We send a 6-digit code to your email. Type it here; no link to open.</p>
+    <div class="in" style="color:var(--muted)">waseem@sadiq.nl <span style="margin-left:auto;color:var(--accent)">${CHECK}</span></div>
+    <div class="code"><i>4</i><i>8</i><i>1</i><i class="f">2</i><i></i><i></i></div>
+    <span class="bt go" style="width:100%;justify-content:center">Sign in</span>
+    <div class="note">Code sent to waseem@sadiq.nl · valid for 10 minutes · <span style="color:var(--muted)">Send again</span></div>
+  </div></div></div>`;
+}
+document.getElementById('app').innerHTML = sys() + bar + `<div class="body">${inner}</div>`;
+</script></body></html>

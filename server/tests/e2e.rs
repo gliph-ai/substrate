@@ -716,3 +716,49 @@ async fn access_link_scopes_projects_and_permissions() {
     let r = t.form(&w.tester, &format!("/sessions/{lid}/revoke"), &[]).await;
     assert_eq!(r.status(), 404);
 }
+
+/// Sidra's Substrate tab: an emailed code for a token, then the dashboard,
+/// approve, sessions, machines and the change stream, all with that token.
+#[tokio::test]
+async fn app_api_code_sign_in_and_dashboard() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let api = |p: &str| format!("{}/api/v1{p}", t.base);
+    // Asking for a code answers the same for anyone; a wrong code is refused.
+    let r = t.http.post(api("/auth/code")).json(&json!({"email": "dev@example.com"})).send().await.unwrap();
+    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
+    let r = t.http.post(api("/auth/verify")).json(&json!({"email": "dev@example.com", "code": "000000"})).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    // A code we know (the mail is not readable here): it works once.
+    sqlx::query("INSERT INTO tokens (hash, kind, ref, expires_at) VALUES ($1,'email_code','dev@example.com', now() + interval '5 minutes')")
+        .bind(substrate_server::app::hash("dev@example.com:123456")).execute(&t.app.db).await.unwrap();
+    let v: Value = t.http.post(api("/auth/verify")).json(&json!({"email": " Dev@Example.com ", "code": "123 456", "device": "iPad"})).send().await.unwrap().json().await.unwrap();
+    let tok = v["token"].as_str().unwrap().to_string();
+    assert_eq!(v["account"]["id"], w.dev.account.as_str());
+    let again = t.http.post(api("/auth/verify")).json(&json!({"email": "dev@example.com", "code": "123456"})).send().await.unwrap();
+    assert_eq!(again.status(), 401, "a code works once");
+    let get = |p: String| { let (http, tok) = (t.http.clone(), tok.clone()); async move { http.get(p).bearer_auth(tok).send().await.unwrap().json::<Value>().await.unwrap() } };
+
+    // The tester's message waits for the developer, prompt included.
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "The export button is grey", "send_anyway": true})).await;
+    let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let d = get(api("/dashboard")).await;
+    assert_eq!(d["counts"]["waiting"], 1, "{d}");
+    assert_eq!(d["waiting"][0]["id"], mid.as_str());
+    assert!(d["waiting"][0]["prompt"].as_str().unwrap().contains("The export button is grey"));
+    // Approve from the app.
+    let r: Value = t.http.post(api(&format!("/messages/{mid}/approve"))).bearer_auth(&tok).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["stage"], "approved");
+    assert_eq!(get(api("/dashboard")).await["counts"]["waiting"], 0);
+    let cid = d["waiting"][0]["conversation_id"].as_str().unwrap().to_string();
+    let c = get(api(&format!("/conversations/{cid}"))).await;
+    assert!(c["events"].as_array().unwrap().len() >= 2, "{c}");
+    // Machines, sessions: read-only lists.
+    assert_eq!(get(api("/machines")).await["machines"].as_array().unwrap().len(), 1);
+    assert!(get(api("/sessions")).await["new_session_url"].as_str().unwrap().ends_with("/sessions/new"));
+    // No token, or someone else's message: refused.
+    assert_eq!(t.http.get(api("/dashboard")).send().await.unwrap().status(), 401);
+    let other = t.http.post(api("/auth/logout")).bearer_auth(&tok).send().await.unwrap();
+    assert_eq!(other.status(), 200);
+    assert_eq!(t.http.get(api("/me")).bearer_auth(&tok).send().await.unwrap().status(), 401, "signed out");
+}
