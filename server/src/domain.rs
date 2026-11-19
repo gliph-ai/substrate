@@ -29,7 +29,7 @@ pub struct Project {
     pub ci_public: bool,
     pub gliph_channel: String,
     pub created_at: DateTime<Utc>,
-    /// Empty until the relay found the project's own logo (`/p/{id}/icon`).
+    /// Empty until the relay found the project's own logo (`/projects/{id}/icon`).
     pub icon_etag: String,
 }
 
@@ -442,9 +442,9 @@ pub async fn status_block(app: &AppInner, m: &Message, since: i64, tester: bool)
     let d = &m.deploy;
     let verify = d.get("verify_url").and_then(|v| v.as_str()).unwrap_or("");
     let ci = d.get("ci_url").and_then(|v| v.as_str()).unwrap_or("");
-    let mut links = json!({ "conversation_url": format!("{}/c/{}", app.cfg.public_url, m.conversation_id) });
+    let mut links = json!({ "conversation_url": format!("{}/conversations/{}", app.cfg.public_url, m.conversation_id) });
     if !m.deploy_stage.is_empty() {
-        links["ci_summary_url"] = json!(format!("{}/c/{}#deploy", app.cfg.public_url, m.conversation_id));
+        links["ci_summary_url"] = json!(format!("{}/conversations/{}#deploy", app.cfg.public_url, m.conversation_id));
     }
     if !verify.is_empty() && safety::host_allowed(verify, &own_host, &p.retest_hosts) {
         links["deployment_url"] = json!(verify);

@@ -164,15 +164,15 @@ async fn world(t: &T) -> World {
     let (st, p) = t.relay_api(&machine, "POST", "/relay/api/projects", json!({"handle": "verna", "name": "Verna", "pane_id": "w1:p1", "agent_session": "s1", "agent": "claude", "cwd": "/work/verna"})).await;
     assert_eq!(st, 200, "{p}");
     let pid = p["id"].as_str().unwrap().to_string();
-    let r = t.form(&dev, &format!("/p/{pid}/invites"), &[("label", "Sarah"), ("days", "14"), ("max_uses", "1")]).await;
+    let r = t.form(&dev, &format!("/projects/{pid}/invites"), &[("label", "Sarah"), ("days", "14"), ("max_uses", "1")]).await;
     let loc = r.headers()["location"].to_str().unwrap().to_string();
     let invite = loc.split("invite=").nth(1).unwrap().split('#').next().unwrap().to_string();
     let tester = t.browser("sarah@example.com").await;
-    let r = t.form(&tester, &format!("/i/{invite}"), &[]).await;
+    let r = t.form(&tester, &format!("/invites/{invite}"), &[]).await;
     assert_eq!(r.status(), 303);
     // A one-use invite cannot be used twice.
     let other = t.browser("mallory@example.com").await;
-    let r = t.form(&other, &format!("/i/{invite}"), &[]).await;
+    let r = t.form(&other, &format!("/invites/{invite}"), &[]).await;
     assert_eq!(r.status(), 200);
     assert!(domain::role(&t.app, &pid, &other.account).await.unwrap().is_none());
     let pat = oauth::create_pat(&t.app, &tester.account, "test").await.unwrap();
@@ -240,7 +240,7 @@ async fn full_loop_approval_delivery_reply_deploy() {
     assert!(!texts.iter().any(|x| x.contains("https://evil")), "agent links must be defanged");
 
     // Deploy: verify URL off the allowlist is withheld; on it, it's the retest link.
-    let r = t.form(&w.dev, &format!("/p/{}/settings", w.pid), &[("name", "Verna"), ("retest_hosts", "verna.app")]).await;
+    let r = t.form(&w.dev, &format!("/projects/{}/settings", w.pid), &[("name", "Verna"), ("retest_hosts", "verna.app")]).await;
     assert_eq!(r.status(), 303);
     for st in ["fix_committed", "ci_running", "ci_passed", "deployed"] {
         let (code, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "deploy",
@@ -323,12 +323,12 @@ async fn security_boundaries() {
     assert_eq!(t.mcp(&spat, "get_message", json!({"message_id": m1})).await["isError"], true);
     assert_eq!(t.mcp(&spat, "send_message", json!({"project_id": w.pid, "text": "hi"})).await["isError"], true);
     // A tester cannot approve or change modes.
-    let r = t.form(&w.tester, &format!("/m/{m3}/approve"), &[]).await;
+    let r = t.form(&w.tester, &format!("/messages/{m3}/approve"), &[]).await;
     assert_eq!(r.status(), 403);
-    let r = t.form(&w.tester, &format!("/p/{}/mode", w.pid), &[("mode", "auto"), ("confirm", "yes")]).await;
+    let r = t.form(&w.tester, &format!("/projects/{}/mode", w.pid), &[("mode", "auto"), ("confirm", "yes")]).await;
     assert_eq!(r.status(), 403);
     // CSRF: a form without the session's token is refused.
-    let r = t.http.post(format!("{}/p/{}/mode", t.base, w.pid)).header("cookie", &w.dev.cookie).form(&[("csrf", "wrong"), ("mode", "approve")]).send().await.unwrap();
+    let r = t.http.post(format!("{}/projects/{}/mode", t.base, w.pid)).header("cookie", &w.dev.cookie).form(&[("csrf", "wrong"), ("mode", "approve")]).send().await.unwrap();
     assert_eq!(r.status(), 403);
     // No bearer: MCP answers 401 with the resource metadata pointer.
     let r = t.http.post(format!("{}/mcp", t.base)).json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).send().await.unwrap();
@@ -340,7 +340,7 @@ async fn security_boundaries() {
     let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "one more thing"})).await;
     let m4 = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
     t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{m4}/approve"), json!({})).await;
-    let r = t.form(&w.dev, &format!("/p/{}/members/{}/remove", w.pid, w.tester.account), &[]).await;
+    let r = t.form(&w.dev, &format!("/projects/{}/members/{}/remove", w.pid, w.tester.account), &[]).await;
     assert_eq!(r.status(), 303);
     assert_eq!(t.mcp(&w.pat, "list_projects", json!({})).await["structuredContent"]["projects"].as_array().unwrap().len(), 0);
 }
@@ -523,14 +523,14 @@ async fn project_icon_from_the_relay() {
     assert_eq!(r.status(), 415);
     let r = t.http.post(format!("{}/relay/api/projects/verna/icon", t.base)).bearer_auth(&w.machine).body(png.clone()).send().await.unwrap();
     assert_eq!(r.status(), 200);
-    let got = t.http.get(format!("{}/p/{}/icon", t.base, w.pid)).send().await.unwrap();
+    let got = t.http.get(format!("{}/projects/{}/icon", t.base, w.pid)).send().await.unwrap();
     assert_eq!(got.headers()["content-type"], "image/png");
     assert_eq!(got.bytes().await.unwrap().to_vec(), png);
     // Testers' assistants get it, and the pages show it.
     let l = t.mcp(&w.pat, "list_projects", json!({})).await;
-    assert!(l["structuredContent"]["projects"][0]["icon_url"].as_str().unwrap().contains(&format!("/p/{}/icon?v=", w.pid)));
-    let page = t.http.get(format!("{}/p/{}", t.base, w.pid)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
-    assert!(page.contains(&format!("src=\"/p/{}/icon?v=", w.pid)));
+    assert!(l["structuredContent"]["projects"][0]["icon_url"].as_str().unwrap().contains(&format!("/projects/{}/icon?v=", w.pid)));
+    let page = t.http.get(format!("{}/projects/{}", t.base, w.pid)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains(&format!("src=\"/projects/{}/icon?v=", w.pid)));
     // Only the owner's relay can set it.
     let other = t.browser("mallory@example.com").await;
     let m2 = t.pair(&other).await;

@@ -65,7 +65,7 @@ pub fn picon(id: &str, name: &str, etag: &str, size: u32) -> Markup {
         @if etag.is_empty() {
             span.picon.tile style=(format!("{style};font-size:{}px", size * 9 / 20)) aria-hidden="true" { (initials(name).chars().next().unwrap_or('?')) }
         } @else {
-            img.picon src=(format!("/p/{id}/icon?v={etag}")) alt="" width=(size) height=(size) style=(style);
+            img.picon src=(format!("/projects/{id}/icon?v={etag}")) alt="" width=(size) height=(size) style=(style);
         }
     }
 }
@@ -428,7 +428,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                     div.row style="font-size:19px;font-weight:500" { "Needs approval " span.badge { (approvals.len()) } }
                     div.list style="padding:0;background:transparent" {
                         @for m in &approvals {
-                            a.item href=(format!("/c/{}", m.conversation_id)) {
+                            a.item href=(format!("/conversations/{}", m.conversation_id)) {
                                 span.l { span class=(format!("dot {}", if m.stage == "held" { "bad" } else { "warn" })) {} span { (truncate(&m.text, 90)) } @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } } }
                                 span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) (m.client_name) " · " (ago(&m.created_at)) }
                             }
@@ -455,7 +455,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                         div.list {
                             div.label { "Your projects" }
                             @for p in &owned {
-                                a.item href=(format!("/p/{}", p.id)) {
+                                a.item href=(format!("/projects/{}", p.id)) {
                                     span.l { (picon(&p.id, &p.name, &p.icon_etag, 28)) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) }
                                     span.r { (state_label(&p.state)) " · " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
                                 }
@@ -466,7 +466,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                         div.list {
                             div.label { "Recent" }
                             @for m in &recent {
-                                a.item href=(format!("/c/{}", m.conversation_id)) {
+                                a.item href=(format!("/conversations/{}", m.conversation_id)) {
                                     span.l { (stage_tag(&m.stage)) span { (truncate(&m.text, 70)) } }
                                     span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (ago(&m.updated_at)) }
                                 }
@@ -478,7 +478,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                     @if !testing.is_empty() {
                         div.list {
                             div.label { "Projects you test" }
-                            @for (pid, name, owner, etag) in &testing { a.item href=(format!("/p/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
+                            @for (pid, name, owner, etag) in &testing { a.item href=(format!("/projects/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
                             a.item href="/connect" { span.l { (ic("plug")) "Connect your assistant" } }
                         }
                     }
@@ -536,15 +536,15 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
     let online = app.machine_online(&p.machine_id);
     let owner_name = domain::account_label(&app, &p.owner_id).await;
 
-    Ok(Html(layout(&p.name, Some(&a), Some(format!("/p/{pid}/live")), html! {
+    Ok(Html(layout(&p.name, Some(&a), Some(format!("/projects/{pid}/live")), html! {
         div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
             @if let Some(secret) = &f.invite {
                 div.card.glow {
                     h3 { "Invitation link" }
                     p.muted { "Send this to your tester. You see it only once." }
-                    div.secret { (format!("{}/i/{}", app.cfg.public_url, secret)) }
-                    div.row { button.btn.small type="button" data-copy=(format!("{}/i/{}", app.cfg.public_url, secret)) { (ic("copy")) "Copy link" } }
+                    div.secret { (format!("{}/invites/{}", app.cfg.public_url, secret)) }
+                    div.row { button.btn.small type="button" data-copy=(format!("{}/invites/{}", app.cfg.public_url, secret)) { (ic("copy")) "Copy link" } }
                 }
             }
             div.between style="padding:8px 4px" {
@@ -585,13 +585,13 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                 div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
                                 div style="font-size:26px;font-weight:500;letter-spacing:-.02em" { "Auto relay is on" }
                                 p style="color:#E4D9C4;margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
-                                form method="post" action=(format!("/p/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { (ic("pause")) "Turn off auto relay" } }
+                                form method="post" action=(format!("/projects/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { (ic("pause")) "Turn off auto relay" } }
                             }
                         } @else {
                             section.card {
                                 div.between { h3 { "Relay mode: approval required" } span.tag { "default" } }
                                 p.muted style="margin:0" { "Every message waits for your approval. Auto relay sends messages without it. Flagged messages still wait." }
-                                form method="post" action=(format!("/p/{pid}/mode")) class="row" data-confirm="Turn on auto relay? Testers' messages reach your agent without your approval." {
+                                form method="post" action=(format!("/projects/{pid}/mode")) class="row" data-confirm="Turn on auto relay? Testers' messages reach your agent without your approval." {
                                     (csrf(&a)) input type="hidden" name="mode" value="auto";
                                     label.sr for="minutes" { "Duration" }
                                     select id="minutes" name="minutes" style="width:auto" { option value="60" { "for 1 hour" } option value="480" selected { "for 8 hours" } option value="0" { "until I turn it off" } }
@@ -610,8 +610,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                         span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/links" { "access link" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
-                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
-                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
+                                                form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
+                                                form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
                                             }
                                         }
                                     }
@@ -626,7 +626,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 div.label { "Conversations" }
                 @if convs.is_empty() { div.item { span.muted { "No conversations yet." } } }
                 @for (cid, title, upd, stage, from, client, dep) in &convs {
-                    a.item href=(format!("/c/{cid}")) {
+                    a.item href=(format!("/conversations/{cid}")) {
                         span.l { (stage_tag(stage)) span { (truncate(title, 80)) } @if !dep.is_empty() { span.tag.ok { (dep.replace('_', " ")) } } }
                         span.r { (from) " · " (logo(client_logo(client), "")) (client) " · " (ago(upd)) }
                     }
@@ -637,7 +637,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     section.main.card id="invite" {
                         h3 { "Invite a tester" }
                         p.muted style="margin:0" { "Testers can send messages and screenshots to this project and read replies. They can't change its settings or your machine." }
-                        form method="post" action=(format!("/p/{pid}/invites")) class="grid" style="align-items:end" {
+                        form method="post" action=(format!("/projects/{pid}/invites")) class="grid" style="align-items:end" {
                             (csrf(&a))
                             div.field { label for="label" { "Tester's name" } input id="label" type="text" name="label" placeholder="Sarah" maxlength="64"; }
                             div.field { label for="days" { "Expires" } select id="days" name="days" { option value="1" { "in 1 day" } option value="7" { "in 7 days" } option value="14" selected { "in 14 days" } option value="30" { "in 30 days" } } }
@@ -649,7 +649,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                 @for (iid, label, uses, max, exp) in &invites {
                                     div.inset.between {
                                         span { (if label.is_empty() { "invitation" } else { label }) span.faint style="font-size:13px" { " · " (uses) "/" (max) " used · expires " (exp.format("%b %d")) } }
-                                        form.inline method="post" action=(format!("/p/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } }
+                                        form.inline method="post" action=(format!("/projects/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } }
                                     }
                                 }
                             }
@@ -657,7 +657,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     }
                     section.side.card {
                         h3 { "Settings" }
-                        form method="post" action=(format!("/p/{pid}/settings")) class="stack" {
+                        form method="post" action=(format!("/projects/{pid}/settings")) class="stack" {
                             (csrf(&a))
                             div.field { label for="name" { "Name" } input id="name" type="text" name="name" value=(p.name) maxlength="64"; }
                             div.field { label for="desc" { "Description for testers" } textarea id="desc" name="description" maxlength="500" { (p.description) } }
@@ -668,7 +668,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                         div.inset style="font-size:13px" {
                             "Gliph channel: "
                             @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/invite substrate" } ", then " span.mono { "/substrate link " (p.handle) } } }
-                            @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/p/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small.tertiary type="submit" { (ic("x")) "Unlink" } } }
+                            @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/projects/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small.tertiary type="submit" { (ic("x")) "Unlink" } } }
                         }
                     }
                 }
@@ -710,7 +710,7 @@ pub async fn project_mode(State(app): State<App>, headers: HeaderMap, User(a): U
     if f.mode == "approve" {
         domain::pump(&app, &pid).await.ok();
     }
-    Ok(Redirect::to(&format!("/p/{pid}?flash={}", urlencoding::encode(if f.mode == "auto" { "Auto relay is on." } else { "Auto relay is off. Every message waits for you." }))).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?flash={}", urlencoding::encode(if f.mode == "auto" { "Auto relay is on." } else { "Auto relay is off. Every message waits for you." }))).into_response())
 }
 
 #[derive(Deserialize)]
@@ -735,7 +735,7 @@ pub async fn project_settings(State(app): State<App>, headers: HeaderMap, User(a
         .bind(&pid).bind(&name).bind(substrate_proto::sanitize(&f.description, 500)).bind(hosts.join(",")).bind(f.ci_public.is_some())
         .execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "project.settings", &pid, &format!("retest_hosts={} ci_public={}", hosts.join(","), f.ci_public.is_some())).await;
-    Ok(Redirect::to(&format!("/p/{pid}?flash=Saved.")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?flash=Saved.")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -756,7 +756,7 @@ pub async fn invite_create(State(app): State<App>, headers: HeaderMap, User(a): 
         .bind(&iid).bind(&pid).bind(hash(&t)).bind(substrate_proto::sanitize(&f.label, 64)).bind(f.max_uses.clamp(1, 25))
         .bind(&a.id).bind(now() + Duration::days(f.days.clamp(1, 30))).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "invite.created", &iid, &f.label).await;
-    Ok(Redirect::to(&format!("/p/{pid}?invite={t}#top")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?invite={t}#top")).into_response())
 }
 
 pub async fn invite_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, iid)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -764,7 +764,7 @@ pub async fn invite_revoke(State(app): State<App>, headers: HeaderMap, User(a): 
     domain::require_owner(&app, &pid, &a.id).await?;
     sqlx::query("UPDATE invites SET revoked=true WHERE id=$1 AND project_id=$2").bind(&iid).bind(&pid).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "invite.revoked", &iid, "").await;
-    Ok(Redirect::to(&format!("/p/{pid}?flash=Invitation+revoked.")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?flash=Invitation+revoked.")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -779,7 +779,7 @@ pub async fn member_trust(State(app): State<App>, headers: HeaderMap, User(a): U
     let on = f.on == "1";
     sqlx::query("UPDATE members SET trusted_auto=$3 WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).bind(on).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), if on { "member.trusted" } else { "member.untrusted" }, &aid, "").await;
-    Ok(Redirect::to(&format!("/p/{pid}")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}")).into_response())
 }
 
 pub async fn member_remove(State(app): State<App>, headers: HeaderMap, User(a): User, Path((pid, aid)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -787,7 +787,7 @@ pub async fn member_remove(State(app): State<App>, headers: HeaderMap, User(a): 
     domain::require_owner(&app, &pid, &a.id).await?;
     sqlx::query("DELETE FROM members WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "member.removed", &aid, "").await;
-    Ok(Redirect::to(&format!("/p/{pid}?flash=Tester+removed.")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?flash=Tester+removed.")).into_response())
 }
 
 pub async fn unlink_gliph(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -796,7 +796,7 @@ pub async fn unlink_gliph(State(app): State<App>, headers: HeaderMap, User(a): U
     sqlx::query("UPDATE projects SET gliph_channel='' WHERE id=$1").bind(&pid).execute(&app.db).await?;
     app.gliph(crate::app::GliphOut::Resubscribe);
     audit(&app, &a.id, &pid, &a.label(), "gliph.unlinked", &pid, "web").await;
-    Ok(Redirect::to(&format!("/p/{pid}?flash=Unlinked+from+Gliph.")).into_response())
+    Ok(Redirect::to(&format!("/projects/{pid}?flash=Unlinked+from+Gliph.")).into_response())
 }
 
 pub async fn project_live(State(app): State<App>, User(a): User, Path(pid): Path<String>) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Fail> {
@@ -838,9 +838,9 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
     let own_host = app.cfg.host();
     let status = match latest { Some(m) => Some(domain::status_block(&app, m, i64::MAX, !owner).await?), None => None };
 
-    Ok(Html(layout(&title, Some(&a), Some(format!("/c/{cid}/live")), html! {
+    Ok(Html(layout(&title, Some(&a), Some(format!("/conversations/{cid}/live")), html! {
         div.between style="padding:4px 0 16px" {
-            div.crumbs { (picon(&p.id, &p.name, &p.icon_etag, 24)) a href=(format!("/p/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
+            div.crumbs { (picon(&p.id, &p.name, &p.icon_etag, 24)) a href=(format!("/projects/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
             div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} (machine.clone().unwrap_or_else(|| "no machine".into())) @if online { " online" } @else { " offline" } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
         }
         div.split style="padding-bottom:48px" {
@@ -850,7 +850,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                 }
                 @if let Some(m) = latest {
                     @if m.stage == "awaiting_sender" && !owner {
-                        form.card method="post" action=(format!("/c/{cid}/answer")) {
+                        form.card method="post" action=(format!("/conversations/{cid}/answer")) {
                             (csrf(&a))
                             h3 { "Answer the agent's question" }
                             label.sr for="answer" { "Your answer" }
@@ -907,7 +907,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                     span.time { (hhmm(&e.created_at)) }
                 }
                 div.body style="font-size:16px" { (text) }
-                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (human_size(x.size)) " · " (x.mime) } } } } }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/attachments/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (human_size(x.size)) " · " (x.mime) } } } } }
             }
         },
         "system" => {
@@ -923,13 +923,13 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                         p.muted style="margin:0;font-size:14px" { "Your agent gets this text:" }
                         div.envelope { (envelope_markup(&m.envelope)) }
                         div.row {
-                            form.inline method="post" action=(format!("/m/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { (ic("check")) "Approve" } }
-                            form.inline method="post" action=(format!("/m/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
+                            form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { (ic("check")) "Approve" } }
+                            form.inline method="post" action=(format!("/messages/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
                         }
                     } }
                     @if owner && open { @if let Some(m) = m {
-                        @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/m/{}/cancel", m.id)) { (csrf(a)) button.btn.small.tertiary type="submit" { (ic("x")) "Cancel delivery" } } }
-                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? The agent may get it twice." { (csrf(a)) button.btn.small type="submit" { (ic("rotate")) "Deliver again" } } }
+                        @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/messages/{}/cancel", m.id)) { (csrf(a)) button.btn.small.tertiary type="submit" { (ic("x")) "Cancel delivery" } } }
+                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/messages/{}/retry", m.id)) data-confirm="Deliver it again? The agent may get it twice." { (csrf(a)) button.btn.small type="submit" { (ic("rotate")) "Deliver again" } } }
                     } }
                 }
             }
@@ -956,9 +956,9 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                     div.tag.bad { "Held: looks like it contains " (e.data["secret_hits"].as_array().map(|v| v.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default()) ". The tester can't see it." }
                 }
                 div.body { (text) }
-                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) } } } }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/attachments/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) } } } }
                 @if e.held && owner {
-                    form method="post" action=(format!("/c/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this reply to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { (ic("eye")) "Release to tester" } }
+                    form method="post" action=(format!("/conversations/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this reply to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { (ic("eye")) "Release to tester" } }
                 }
             }
         },
@@ -1010,7 +1010,7 @@ fn envelope_markup(env: &str) -> Markup {
 pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
     let m = domain::decide(&app, &a.id, &mid, &action).await?;
-    Ok(Redirect::to(&format!("/c/{}", m.conversation_id)).into_response())
+    Ok(Redirect::to(&format!("/conversations/{}", m.conversation_id)).into_response())
 }
 
 pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): User, Path((cid, seq)): Path<(String, i64)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -1022,7 +1022,7 @@ pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): U
         audit(&app, &a.id, &pid, &a.label(), "reply.released", &e.message_id, &seq.to_string()).await;
         app.wake(&cid, seq);
     }
-    Ok(Redirect::to(&format!("/c/{cid}")).into_response())
+    Ok(Redirect::to(&format!("/conversations/{cid}")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1043,7 +1043,7 @@ pub async fn answer(State(app): State<App>, headers: HeaderMap, User(a): User, P
         project_id: &m.project_id, sender_id: &a.id, sender_label: "", client_name: "Substrate web", conversation_id: Some(&cid),
         kind: "answer", text: &f.text, idem_key: "", attachment_ids: &[],
     }).await?;
-    Ok(Redirect::to(&format!("/c/{cid}")).into_response())
+    Ok(Redirect::to(&format!("/conversations/{cid}")).into_response())
 }
 
 pub async fn conversation_live(State(app): State<App>, User(a): User, Path(cid): Path<String>) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Fail> {
@@ -1192,12 +1192,12 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
                 div.card {
                     div.row { span.badge { "1" } h3 { "Accept with your email" } }
                     form method="post" action="/login" class="row" {
-                        input type="hidden" name="next" value=(format!("/i/{t}"));
+                        input type="hidden" name="next" value=(format!("/invites/{t}"));
                         label.sr for="em" { "Email" }
                         input id="em" type="email" name="email" required placeholder="you@example.com" style="flex:1 1 240px;width:auto";
                         button.btn.primary type="submit" { (ic("mail")) "Send sign-in link" }
                     }
-                    a href=(format!("/auth/gliph?next=/i/{t}")) class="row" style="font-size:14px;color:#BFC8FF;text-decoration:none" { (gliph_mark(18)) "Already on Gliph? Sign in with Gliph" }
+                    a href=(format!("/auth/gliph?next=/invites/{t}")) class="row" style="font-size:14px;color:#BFC8FF;text-decoration:none" { (gliph_mark(18)) "Already on Gliph? Sign in with Gliph" }
                 }
             }
             (assistant_steps(&app))
