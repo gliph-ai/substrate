@@ -174,7 +174,7 @@ document.addEventListener("submit", (e) => {
         await audio.play();
       } catch (err) {
         b.classList.remove("loading", "singing");
-        $("chat-banner").hidden = false; $("chat-banner-text").textContent = err.message;
+        notice(err.message, "bad");
       }
     };
     return b;
@@ -225,6 +225,20 @@ document.addEventListener("submit", (e) => {
     });
     if (text) dt.el.append(el("span", "dt-note", text));
     log.append(dt.el);
+  }
+
+  // One notice above the composer. warn stays (the agent is offline); bad is an error
+  // that goes after a few seconds or on its ×.
+  let noticeTimer = null;
+  function notice(text, kind) {
+    const b = $("chat-banner");
+    clearTimeout(noticeTimer);
+    if (!text) { b.hidden = true; return; }
+    b.className = "chat-banner notice " + (kind || "warn");
+    $("chat-banner-text").textContent = text;
+    $("chat-banner-x").hidden = kind !== "bad";
+    b.hidden = false;
+    if (kind === "bad") noticeTimer = setTimeout(() => notice(S.offlineText || ""), 6000);
   }
 
   const project = () => S.projects.find((p) => p.project_id === S.pid);
@@ -279,9 +293,9 @@ document.addEventListener("submit", (e) => {
     t.append(el("span", "faint", (p.agent || "agent") + " · " + dev()), pill(p));
     h.append(t);
     if (summary) h.append(el("div", "muted chat-sum", named(summary)));
-    const ban = $("chat-banner"), btn = $("chat-send").querySelector("span");
-    if (available(p)) { ban.hidden = true; btn.textContent = S.next === "answer_question" ? "Answer" : "Send"; }
-    else { ban.hidden = false; $("chat-banner-text").textContent = "The agent is offline. A message waits until " + dev() + " starts it again."; btn.textContent = "Send anyway"; }
+    const btn = $("chat-send").querySelector("span");
+    if (available(p)) { S.offlineText = ""; notice(""); btn.textContent = S.next === "answer_question" ? "Answer" : "Send"; }
+    else { S.offlineText = "The agent is offline. A message waits until " + dev() + " starts it again."; notice(S.offlineText, "warn"); btn.textContent = "Send anyway"; }
     deployOpts();
     $("chat-text").placeholder = S.next === "answer_question" ? "Answer the agent's question" : "Message " + (p.agent || "the agent");
   }
@@ -362,7 +376,7 @@ document.addEventListener("submit", (e) => {
   function addFiles(list) {
     for (const f of list) {
       if (pending.length >= 5) break;
-      if (f.size > 10 * 1024 * 1024) { $("chat-banner").hidden = false; $("chat-banner-text").textContent = f.name + " is over 10 MB."; continue; }
+      if (f.size > 10 * 1024 * 1024) { notice(f.name + " is over 10 MB.", "bad"); continue; }
       pending.push(f);
     }
     chips();
@@ -390,6 +404,7 @@ document.addEventListener("submit", (e) => {
     new EventSource(live).onmessage = () => reload().catch(() => {});
   }
 
+  $("chat-banner-x").onclick = () => notice(S.offlineText || "");
   $("chat-new").onclick = fresh;
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });
@@ -407,7 +422,7 @@ document.addEventListener("submit", (e) => {
       block(b); watch(); reload();
       history.replaceState(null, "", "#" + S.cid);
     } catch (err) {
-      $("chat-banner").hidden = false; $("chat-banner-text").textContent = err.message;
+      notice(err.message, "bad");
     } finally { btn.disabled = false; }
   });
   reload().then(() => { if (location.hash.startsWith("#c_")) open(location.hash.slice(1)); else fresh(); })

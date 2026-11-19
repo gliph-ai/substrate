@@ -39,13 +39,12 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                         div.chat-who.faint { (who) }
                     }
                     main.chat-main {
-                        header.chat-head #chat-head {}
+                        header.chat-top { div.chat-head #chat-head {} div.chat-opts #chat-opts hidden {} }
                         div.chat-log #chat-log {
                             div.chat-empty { (orb("xl")) h2 { "Talk to the developer's agent." } p.muted { "Report a bug, ask a question or request a change. The developer sees every message." } }
                         }
-                        div.chat-banner.notice.warn #chat-banner hidden { span.ni { (ic("alert")) } div.nb #chat-banner-text {} }
+                        div.chat-banner.notice.warn #chat-banner hidden role="status" { span.ni { (ic("alert")) } div.nb #chat-banner-text {} button.x #chat-banner-x type="button" aria-label="Dismiss" hidden { (ic("x")) } }
                         div.chat-files #chat-files hidden {}
-                        div.chat-opts #chat-opts hidden {}
                         form.chat-compose #chat-form {
                             input #chat-file type="file" multiple hidden accept="image/png,image/jpeg,image/webp,application/pdf,text/plain";
                             button.btn.tertiary.icon #chat-attach type="button" aria-label="Attach files" { (ic("paperclip")) }
