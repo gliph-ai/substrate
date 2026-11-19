@@ -124,7 +124,24 @@ pub async fn refresh(State(app): State<App>, Json(r): Json<Refresh>) -> Result<J
     Ok(Json(json!({"machine_id": machine, "access_token": access, "refresh_token": refresh, "expires_in": ACCESS_TTL_MIN * 60})))
 }
 
+/// Deliveries the old binding still held (accepted, submitted, working)
+/// become interrupted: the developer decides whether to send them again, and
+/// the project's queue moves on.
+pub async fn interrupt_in_flight(app: &AppInner, pid: &str, why: &str) -> Result<(), Fail> {
+    let stuck = sqlx::query_as::<_, Message>(
+        "UPDATE messages SET stage='interrupted', updated_at=now() WHERE project_id=$1 AND stage IN ('accepted','submitted','working') RETURNING *",
+    ).bind(pid).fetch_all(&app.db).await?;
+    for m in stuck {
+        add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", why, json!({"message_id": m.id, "stage": "interrupted"}), false).await?;
+    }
+    Ok(())
+}
+
 pub async fn revoke_machine(app: &AppInner, account: &str, machine: &str, why: &str) -> Result<(), Fail> {
+    let pids: Vec<String> = sqlx::query_scalar("SELECT id FROM projects WHERE machine_id=$1").bind(machine).fetch_all(&app.db).await?;
+    for pid in &pids {
+        interrupt_in_flight(app, pid, "The developer's computer was signed out before the agent finished. The developer can deliver it again.").await?;
+    }
     sqlx::query("UPDATE machines SET revoked=true WHERE id=$1 AND account_id=$2").bind(machine).bind(account).execute(&app.db).await?;
     sqlx::query("DELETE FROM tokens WHERE machine_id=$1").bind(machine).execute(&app.db).await?;
     if let Some(tx) = app.hub.lock().unwrap().remove(machine) {
@@ -551,8 +568,10 @@ pub async fn api_bind(State(app): State<App>, headers: HeaderMap, Path(handle): 
     sqlx::query("UPDATE projects SET machine_id=$2, pane_id=$3, agent_session=$4, agent=$5, cwd=$6, state='unknown' WHERE id=$1")
         .bind(&p.id).bind(&machine).bind(proto::sanitize(&b.pane_id, 64)).bind(proto::sanitize(&b.agent_session, 128))
         .bind(proto::sanitize(&b.agent, 32)).bind(proto::sanitize(&b.cwd, 512)).execute(&app.db).await?;
-    // A message stuck mid-delivery on the old binding is not silently resent.
+    // Sent but never acknowledged: it goes to the new binding. Anything the
+    // old agent already had is interrupted, never resent by itself.
     sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE project_id=$1 AND stage='dispatched'").bind(&p.id).execute(&app.db).await?;
+    interrupt_in_flight(&app, &p.id, "The project moved to another pane before the agent finished. The developer can deliver it again.").await?;
     audit(&app, &account, &p.id, &handle, "project.bound", &b.pane_id, &format!("machine {machine}")).await;
     push_bindings(&app, &machine).await?;
     if !old_machine.is_empty() && old_machine != machine {
@@ -565,6 +584,7 @@ pub async fn api_unbind(State(app): State<App>, headers: HeaderMap, Path(handle)
     let (account, machine) = machine_auth(&app, &headers).await?;
     let p = owned_by_handle(&app, &account, &handle).await?;
     sqlx::query("UPDATE projects SET pane_id='', agent_session='', state='unbound' WHERE id=$1").bind(&p.id).execute(&app.db).await?;
+    interrupt_in_flight(&app, &p.id, "The project was unbound before the agent finished. The developer can deliver it again.").await?;
     audit(&app, &account, &p.id, &handle, "project.unbound", &p.pane_id, "").await;
     push_bindings(&app, &machine).await?;
     Ok(Json(json!({"ok": true})))

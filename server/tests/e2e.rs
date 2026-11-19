@@ -401,6 +401,13 @@ async fn offline_rebind_busy_and_restart() {
     sqlx::query("UPDATE messages SET expires_at=now() - interval '1 minute' WHERE id=$1").bind(&c).execute(&t.app.db).await.unwrap();
     domain::housekeeping(&t.app).await.unwrap();
     assert_eq!(t.stage(&c).await, "expired");
+
+    // A rebind while the agent holds a message interrupts it instead of
+    // blocking the project's queue forever.
+    let held = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "held by the old pane"})).await["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    sqlx::query("UPDATE messages SET stage='submitted' WHERE id=$1").bind(&held).execute(&t.app.db).await.unwrap();
+    t.relay_api(&w.machine, "POST", "/relay/api/projects/verna/bind", json!({"pane_id": "w1:p1", "agent_session": "s2-new", "agent": "claude", "cwd": "/work/verna"})).await;
+    assert_eq!(t.stage(&held).await, "interrupted");
 }
 
 #[tokio::test]
