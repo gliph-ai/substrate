@@ -289,7 +289,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
                 AckStage::Submitted => ("submitted", format!("Submitted to the agent in herdr pane {}.", p.pane_id), false),
                 AckStage::Working => ("working", "The agent is working on it.".to_string(), false),
                 AckStage::AgentIdle => ("working", "The agent stopped working without sending a reply.".to_string(), true),
-                AckStage::Uncertain => ("uncertain", "Unconfirmed: the relay restarted while submitting. It was not retried; the developer decides.".to_string(), true),
+                AckStage::Uncertain => ("uncertain", "Unconfirmed. The relay restarted during delivery. The developer can send it again.".to_string(), true),
                 AckStage::Failed => ("failed", format!("Delivery failed: {}", if detail.is_empty() { "unknown error" } else { &detail }), true),
             };
             // Never move a message backwards, or past a terminal stage.
@@ -417,8 +417,8 @@ pub fn deploy_line(d: &Value) -> String {
         "deploy_failed" => "The deploy failed.".into(),
         "verified" => "Smoke check passed on the live app.".into(),
         "ready_to_retest" => "Ready to retest.".into(),
-        "not_deploying" => "Fixed in code; not being deployed now.".into(),
-        "unknown" => "The pipeline stopped reporting; its state is unknown.".into(),
+        "not_deploying" => "Fixed in code. No deploy is running.".into(),
+        "unknown" => "The pipeline state is unknown.".into(),
         other => other.to_string(),
     };
     if !s("note").is_empty() {

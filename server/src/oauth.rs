@@ -113,10 +113,10 @@ async fn validate(app: &AppInner, q: &AuthorizeQ) -> Result<String, String> {
         return Err("This app is not registered with Substrate. Remove the connector and add it again.".into());
     };
     if !uris.iter().any(|u| u == &q.redirect_uri) {
-        return Err("This app asked to send you somewhere it did not register. Nothing was shared.".into());
+        return Err("This app used an address it did not register. Nothing was shared.".into());
     }
     if q.response_type != "code" || q.code_challenge_method != "S256" || q.code_challenge.len() < 43 {
-        return Err("This app's sign-in request is incomplete (it needs PKCE with S256).".into());
+        return Err("This app's sign-in request is incomplete. It must use PKCE with S256.".into());
     }
     Ok(name)
 }

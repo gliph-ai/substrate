@@ -14,11 +14,11 @@ curl -fsSL "$BASE/downloads/substrate/latest/$name" -o "$tmp/substrate"
 curl -fsSL "$BASE/downloads/substrate/latest/$name.sha256" -o "$tmp/sum"
 want=$(cut -d' ' -f1 < "$tmp/sum")
 if command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp/substrate" | cut -d' ' -f1); else got=$(sha256sum "$tmp/substrate" | cut -d' ' -f1); fi
-[ "$want" = "$got" ] || { echo "substrate: checksum mismatch, not installing" >&2; exit 1; }
+[ "$want" = "$got" ] || { echo "substrate: the checksum does not match. Nothing was installed." >&2; exit 1; }
 mkdir -p "$HOME/.local/bin"
 install -m 0755 "$tmp/substrate" "$HOME/.local/bin/substrate"
 [ "$os" = darwin ] && xattr -d com.apple.quarantine "$HOME/.local/bin/substrate" 2>/dev/null || true
-echo "Installed to ~/.local/bin/substrate"
+echo "Installed ~/.local/bin/substrate"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "Add ~/.local/bin to your PATH." ;; esac
 echo
 echo "Next:"

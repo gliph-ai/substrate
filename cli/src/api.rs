@@ -98,7 +98,7 @@ impl Api {
 
     pub async fn download(&self, url: &str) -> Result<Vec<u8>> {
         if !url.starts_with(&self.server) {
-            bail!("refusing to download from outside {}", self.server);
+            bail!("download refused: the file is outside {}", self.server);
         }
         let (tok, _) = self.access(false).await?;
         let r = self.http.get(url).bearer_auth(tok).send().await?;
@@ -139,10 +139,10 @@ impl Api {
             }
             match v["error"].as_str() {
                 Some("authorization_pending") => continue,
-                Some("access_denied") => bail!("the pairing was denied in the browser"),
+                Some("access_denied") => bail!("you denied the pairing in the browser"),
                 _ => bail!("the pairing code expired; run `substrate login` again"),
             }
         }
-        bail!("timed out waiting for the browser")
+        bail!("no confirmation from the browser in time. Run `substrate login` again.")
     }
 }

@@ -16,7 +16,7 @@ use substrate_cli::launchd;
 use substrate_proto::{DeployReport, Report, DEPLOY_STAGES};
 
 #[derive(Parser)]
-#[command(name = "substrate", version, about = "Give people a direct line to the agents building your software.")]
+#[command(name = "substrate", version, about = "Give your testers a direct line to the agents that build your software.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -24,24 +24,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Pair this computer with your Substrate account (opens the browser).
+    /// Pair this computer with your Substrate account in the browser.
     Login {
         #[arg(long)]
         server: Option<String>,
-        /// How this computer is named on the dashboard.
+        /// The name of this computer on the dashboard.
         #[arg(long)]
         name: Option<String>,
     },
-    /// Sign this computer out and forget its credentials.
+    /// Sign this computer out and delete its credentials.
     Logout,
-    /// Account, connection and project state.
+    /// Show the account, connection and project state.
     Status,
     /// Run or manage the background relay.
     Daemon {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
-    /// Herdr helpers.
+    /// Herdr commands.
     Herdr {
         #[command(subcommand)]
         cmd: HerdrCmd,
@@ -53,30 +53,30 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ProjectCmd,
     },
-    /// Recent messages across your projects.
+    /// List recent messages in all your projects.
     Inbox,
-    /// Messages waiting for your approval.
+    /// List messages that wait for your approval.
     Approvals,
-    /// Approve a message: it goes to the agent when the agent is free.
+    /// Approve a message. The agent gets it when it is free.
     Approve { id: String },
-    /// Decline a message. It is never delivered.
+    /// Reject a message. Substrate does not deliver it.
     Reject { id: String },
     /// Deliver an uncertain, failed or expired message again.
     Retry { id: String },
-    /// Cancel a message before the agent receives it.
+    /// Cancel a message before the agent gets it.
     Cancel { id: String },
     /// (For agents) Report progress on a message.
     Progress { id: String, #[arg(long)] text: String },
     /// (For agents) Ask the tester a question.
     Ask { id: String, #[arg(long)] text: String },
-    /// (For agents) Reply to a message; --final when the work is done.
+    /// (For agents) Reply to a message. Add --final when the work is done.
     Reply {
         id: String,
         #[arg(long)]
         text: String,
         #[arg(long = "final")]
         final_: bool,
-        /// A file inside the project to attach (repeatable).
+        /// A file in the project to attach. Use it more than once for more files.
         #[arg(long)]
         attach: Vec<String>,
     },
@@ -90,45 +90,45 @@ enum Cmd {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Check everything the relay depends on.
+    /// Check Herdr, the credentials, the server and the LaunchAgent.
     Doctor,
 }
 
 #[derive(Subcommand)]
 enum DaemonCmd {
-    /// Install and start the LaunchAgent (starts at login, restarts on crash).
+    /// Install and start the LaunchAgent. It starts at login and restarts after a crash.
     Install,
-    /// Start it (same as install).
+    /// Start the LaunchAgent (the same as install).
     Start,
-    /// Stop it and remove the LaunchAgent.
+    /// Stop the relay and remove the LaunchAgent.
     Stop,
     /// Restart the running relay.
     Restart,
-    /// Run in the foreground (what launchd runs).
+    /// Run the relay in the foreground. launchd uses this command.
     Run,
 }
 
 #[derive(Subcommand)]
 enum HerdrCmd {
-    /// List the agents Herdr is running.
+    /// List the agents that Herdr runs.
     Discover,
 }
 
 #[derive(Subcommand)]
 enum ProjectCmd {
-    /// Create a project bound to a Herdr pane on this computer.
+    /// Create a project and bind it to a Herdr pane on this computer.
     Add { handle: String, #[arg(long)] pane: String, #[arg(long)] name: Option<String> },
-    /// Bind (or move) a project to a pane. The only way delivery changes target.
+    /// Bind a project to a pane, or move it. Only this command changes the target.
     Bind { handle: String, pane: String },
-    /// Stop delivering to any pane. Messages stay queued.
+    /// Remove the binding. Messages stay in the queue.
     Unbind { handle: String },
-    /// Find the project's logo in its folder again (or use --file) and upload it.
+    /// Upload the project's logo again, from its folder or from --file.
     Icon { handle: String, #[arg(long)] file: Option<String> },
-    /// approve: every message waits for you. auto: relay without approval.
+    /// approve: each message waits for you. auto: messages go to the agent without approval.
     Mode {
         handle: String,
         mode: String,
-        /// For auto: 1h, 8h, or a number of minutes. Omit for "until turned off".
+        /// For auto: 1h, 8h or a number of minutes. Leave it out to keep auto on.
         #[arg(long = "for")]
         for_: Option<String>,
         /// Required to turn on auto relay.
@@ -139,7 +139,7 @@ enum ProjectCmd {
 
 #[derive(Subcommand)]
 enum DeployCmd {
-    /// Start watching CI and the deploy for a fix.
+    /// Track CI and the deploy for a fix.
     Track {
         id: String,
         #[arg(long)]
@@ -148,14 +148,14 @@ enum DeployCmd {
         ci_url: Option<String>,
         #[arg(long)]
         env: Option<String>,
-        /// The URL the tester should retest on.
+        /// The URL for the tester to retest on.
         #[arg(long)]
         verify_url: Option<String>,
-        /// Only call it live when verify-url serves the commit's short sha.
+        /// Report live only when verify-url shows the commit's short sha.
         #[arg(long)]
         expect_sha: bool,
     },
-    /// Report a stage you observed yourself.
+    /// Report a stage that you saw.
     Status {
         id: String,
         #[arg(long)]
@@ -207,7 +207,7 @@ fn table(rows: &[Vec<String>]) {
 }
 
 fn find_pane(id: &str) -> Result<substrate_proto::Pane> {
-    let panes = herdr::Cli::new().list().context("could not ask Herdr for its panes (is herdr running?)")?;
+    let panes = herdr::Cli::new().list().context("no answer from Herdr. Is herdr running?")?;
     panes.into_iter().find(|p| p.pane_id == id).with_context(|| format!("no agent in Herdr pane {id}; see `substrate herdr discover`"))
 }
 
@@ -234,14 +234,14 @@ async fn run() -> Result<()> {
                 o.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "computer".into())
             });
             let c = api.pair(&name).await?;
-            println!("Paired {name} ({}). Credentials are in the {}.", c.machine_id, api.store().backend());
-            println!("Next: substrate herdr discover, then substrate project add <handle> --pane <id>, then substrate daemon install");
+            println!("Paired {name} ({}). Your credentials are in the {}.", c.machine_id, api.store().backend());
+            println!("Next:\n  substrate herdr discover\n  substrate project add <handle> --pane <id>\n  substrate daemon install");
         }
         Cmd::Logout => {
             let _ = api.call("POST", "/relay/api/logout", None).await;
             api.store().clear()?;
             let _ = launchd::uninstall();
-            println!("Signed out. The relay is stopped.");
+            println!("Signed out. The relay stopped.");
         }
         Cmd::Status => {
             let me = api.call("GET", "/relay/api/whoami", None).await?;
@@ -265,11 +265,11 @@ async fn run() -> Result<()> {
                 api.store().load()?.context("not signed in; run `substrate login` first")?;
                 let exe = std::env::current_exe()?.to_string_lossy().to_string();
                 launchd::install(&exe, &paths.logs().to_string_lossy(), &cfg.server)?;
-                println!("The relay runs in the background now and starts at login. `substrate status` shows it.");
+                println!("The relay runs in the background and starts at login. Run `substrate status` to check it.");
             }
             DaemonCmd::Stop => {
                 launchd::uninstall()?;
-                println!("Stopped. Messages stay queued in Substrate until it runs again.");
+                println!("Stopped. Messages stay in the queue until the relay runs again.");
             }
             DaemonCmd::Restart => launchd::restart()?,
             DaemonCmd::Run => {
@@ -290,7 +290,7 @@ async fn run() -> Result<()> {
             }
         },
         Cmd::Herdr { cmd: HerdrCmd::Discover } => {
-            let panes = herdr::Cli::new().list().context("could not ask Herdr (is it running?)")?;
+            let panes = herdr::Cli::new().list().context("no answer from Herdr. Is herdr running?")?;
             let mut rows = vec![vec!["PANE".into(), "AGENT".into(), "STATUS".into(), "TITLE".into(), "DIRECTORY".into()]];
             for p in panes {
                 rows.push(vec![p.pane_id, p.agent, p.status, p.title, p.cwd]);
@@ -311,7 +311,7 @@ async fn run() -> Result<()> {
                 let p = find_pane(&pane)?;
                 api.call("POST", "/relay/api/projects", Some(json!({"handle": handle, "name": name.unwrap_or_default(), "pane_id": p.pane_id,
                     "agent_session": p.agent_session, "agent": p.agent, "cwd": p.cwd}))).await?;
-                println!("Created {handle}, bound to {} ({} in {}). New projects require approval for every message.", p.pane_id, p.agent, p.cwd);
+                println!("Created {handle} on {} ({} in {}). You approve each message.", p.pane_id, p.agent, p.cwd);
                 upload_icon(&api, &handle, &p.cwd, None).await;
                 println!("Invite testers from {}/", cfg.server);
             }
@@ -325,12 +325,12 @@ async fn run() -> Result<()> {
                 let cwd = api.call("GET", "/relay/api/projects", None).await?["projects"].as_array().into_iter().flatten()
                     .find(|p| p["handle"] == handle.as_str()).and_then(|p| p["cwd"].as_str().map(String::from)).unwrap_or_default();
                 if !upload_icon(&api, &handle, &cwd, file.as_deref()).await {
-                    bail!("no logo found; pass --file <png>");
+                    bail!("no logo in the project folder. Add --file <png>.");
                 }
             }
             ProjectCmd::Unbind { handle } => {
                 api.call("POST", &format!("/relay/api/projects/{handle}/unbind"), None).await?;
-                println!("{handle} is unbound. Messages stay queued.");
+                println!("{handle} is unbound. Messages stay in the queue.");
             }
             ProjectCmd::Mode { handle, mode, for_, yes } => {
                 let minutes = match for_.as_deref() {
@@ -340,10 +340,10 @@ async fn run() -> Result<()> {
                     Some(m) => Some(m.parse::<i64>().context("--for is 1h, 8h or minutes")?),
                 };
                 if mode == "auto" && !yes {
-                    bail!("auto relay sends testers' messages to your agent without your approval. Add --yes to confirm.");
+                    bail!("in auto relay, testers' messages go to your agent without your approval. Add --yes to confirm.");
                 }
                 api.call("POST", &format!("/relay/api/projects/{handle}/mode"), Some(json!({"mode": mode, "minutes": minutes}))).await?;
-                println!("{handle}: {}", if mode == "auto" { "auto relay on (flagged messages still wait; your agent's own permissions are unchanged)" } else { "approval required" });
+                println!("{handle}: {}", if mode == "auto" { "auto relay on. Flagged messages still wait for you. Your agent's permissions stay the same." } else { "approval required" });
             }
         },
         Cmd::Inbox | Cmd::Approvals => {
@@ -356,7 +356,7 @@ async fn run() -> Result<()> {
                 rows.push(vec![m["id"].as_str().unwrap_or("").into(), format!("{} via {}", m["from"].as_str().unwrap_or(""), m["client"].as_str().unwrap_or("")), stage, text]);
             }
             if rows.len() == 1 {
-                println!("Nothing here.");
+                println!("No messages.");
             } else {
                 table(&rows);
             }
@@ -387,7 +387,7 @@ async fn run() -> Result<()> {
                 let _ = std::fs::write(paths.dispatch().join(format!("{}.final", substrate_proto::safe_filename(&id))), b"");
             }
             if v["held"].as_bool().unwrap_or(false) {
-                println!("Sent, but held for the developer: it looks like it contains {}.", v["secret_hits"]);
+                println!("Held for the developer. Possible secret: {}.", v["secret_hits"]);
             } else {
                 println!("Reply sent.");
             }
@@ -398,7 +398,7 @@ async fn run() -> Result<()> {
                 let job = Job { message_id: id.clone(), reply_token: r.reply_token, commit, ci_url: ci_url.unwrap_or_default(), env: env.unwrap_or_default(),
                     verify_url: verify_url.unwrap_or_default(), expect_sha, cwd: r.cwd, changed_at: chrono::Utc::now().timestamp(), ..Default::default() };
                 substrate_cli::config::write_private(&job_path(&paths, &id), &serde_json::to_vec_pretty(&job)?)?;
-                println!("Watching the pipeline for {id}. The tester is told each stage, and \"ready to retest\" only once it's live.");
+                println!("Tracking the pipeline for {id}. The tester gets each stage, and \"ready to retest\" when the fix is live.");
             }
             DeployCmd::Status { id, stage, url, note } => {
                 if !DEPLOY_STAGES.contains(&stage.as_str()) {
@@ -432,7 +432,7 @@ async fn upload_icon(api: &Api, handle: &str, cwd: &str, file: Option<&str>) -> 
     };
     let Some(bytes) = bytes else { return false };
     match api.icon(handle, bytes).await {
-        Ok(()) => { println!("Found the project's logo and set it as its icon."); true }
+        Ok(()) => { println!("Project icon set from its logo."); true }
         Err(e) => { eprintln!("substrate: icon not set: {e}"); false }
     }
 }
@@ -450,12 +450,12 @@ async fn decide(api: &Api, id: &str, action: &str) -> Result<()> {
 /// Only files inside the bound project, after following symlinks.
 async fn upload_inside(api: &Api, r: &daemon::Record, path: &str) -> Result<String> {
     if r.cwd.is_empty() {
-        bail!("this project has no directory on record; attachments are refused");
+        bail!("this project has no directory, so it cannot send attachments");
     }
     let root = std::fs::canonicalize(&r.cwd)?;
     let file = std::fs::canonicalize(path).with_context(|| format!("no such file: {path}"))?;
     if !file.starts_with(&root) || !file.is_file() {
-        bail!("{path} is outside the project ({}); refused", root.display());
+        bail!("{path} is outside the project ({})", root.display());
     }
     let bytes = std::fs::read(&file)?;
     if bytes.len() > 10 * 1024 * 1024 {
@@ -482,7 +482,7 @@ async fn doctor(paths: &Paths, cfg: &Config, api: &Api) {
     }
     println!("{} LaunchAgent: {}", ok(launchd::loaded()), if launchd::loaded() { "loaded" } else { "not installed (substrate daemon install)" });
     let gh = std::process::Command::new("gh").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
-    println!("{} gh (for CI watching): {}", ok(gh), if gh { "found" } else { "not found; deploy track falls back to agent-reported stages" });
+    println!("{} gh (for CI watching): {}", ok(gh), if gh { "found" } else { "not found. Deploy track uses the stages your agent reports." });
     if let Some(st) = Status::load(paths) {
         if !st.error.is_empty() {
             println!("     last relay error: {}", st.error);

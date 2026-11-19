@@ -313,7 +313,7 @@ async fn security_boundaries() {
     assert_eq!(body["held"], true);
     let g = t.mcp(&w.pat, "get_message", json!({"message_id": m1})).await["structuredContent"].clone();
     assert!(!g.to_string().contains("AKIAIOSFODNN7EXAMPLE"));
-    assert!(g["summary"].as_str().unwrap().contains("reviewing"));
+    assert!(g["summary"].as_str().unwrap().contains("reviews the reply"));
 
     // A stranger with a valid token sees nothing of this project.
     let stranger = t.browser("eve@example.com").await;

@@ -45,7 +45,7 @@ async fn register_frame(app: &App) -> anyhow::Result<String> {
         "commands": [{
             "name": "substrate",
             "usage": "/substrate link|unlink|status|approve|reject|send|mode …",
-            "desc": "Substrate: talk to your coding agents from this channel",
+            "desc": "Substrate: message your coding agents from this channel",
             "args": [{"name": "command", "type": "text", "required": false}],
             "scope": "channel", "min_role": "member"
         }],
@@ -128,7 +128,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
     let a1 = words.next().map(str::to_string);
     let rest = words.next().unwrap_or("").to_string();
     if sub.is_empty() || sub == "help" {
-        return Ok("Substrate: /invite substrate adds it to a channel. Then /substrate link <project> · unlink · status [project] · approve <message> · reject <message> · send <project> <text> · mode <project> approve|auto [1h|8h]. In a linked channel, '@<project> <text>' messages its agent.".into());
+        return Ok("Substrate: /invite substrate adds it to a channel. Then /substrate link <project> · unlink · status [project] · approve <message> · reject <message> · send <project> <text> · mode <project> approve|auto [1h|8h]. In a linked channel, type '@<project> <text>' to message its agent.".into());
     }
     let account = account_for_nick(app, actor).await.ok_or_else(|| sign_in_hint(app))?;
     let fail = |e: crate::app::Fail| e.1;
@@ -142,7 +142,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
             sqlx::query("UPDATE projects SET gliph_channel=$2 WHERE id=$1").bind(&p.id).bind(channel).execute(&app.db).await.map_err(|_| "database error")?;
             crate::app::audit(app, &account, &p.id, actor, "gliph.linked", channel, "").await;
             app.gliph(GliphOut::Resubscribe);
-            Ok(format!("Linked {}. Its conversations appear here; '@{} <text>' messages its agent.", p.name, p.handle))
+            Ok(format!("Linked {}. Its conversations appear here. Type '@{} <text>' to message its agent.", p.name, p.handle))
         }
         "unlink" => {
             let p = resolve(app, &account, a1.as_deref(), channel).await?;
@@ -184,7 +184,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
             let mode = it.next().unwrap_or("");
             let minutes = match it.next() { Some("1h") => Some(60), Some("8h") => Some(480), Some(_) => return Err("duration is 1h or 8h (or nothing: until turned off)".into()), None => None };
             set_mode(app, &account, &p, mode, minutes, "gliph").await.map_err(fail)?;
-            Ok(if mode == "auto" { format!("Auto relay is on for {}. Messages reach its agent without approval; flagged ones still wait.", p.name) } else { format!("{} is back to approval required.", p.name) })
+            Ok(if mode == "auto" { format!("Auto relay is on for {}. Messages reach its agent without approval. Flagged ones still wait.", p.name) } else { format!("{} is back to approval required.", p.name) })
         }
         _ => Err("unknown subcommand; try /substrate help".into()),
     }

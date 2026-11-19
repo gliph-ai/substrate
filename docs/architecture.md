@@ -1,12 +1,11 @@
-# Substrate
+# Architecture
 
-Substrate lets people reach a developer's running coding agents through their
-own AI assistant. It is a Gliph product, built in Rust: the cloud
-(`server/`, axum + PostgreSQL) runs on `substrate.gliph.sh` as its own Pushleft
-project, and the local relay is the `substrate` CLI and daemon (`cli/`). Both
-compile the same wire contract (`proto/`). Inside Gliph, Substrate is a plugin
-on gliph.sh: it registers `/substrate` at runtime and posts into linked
-channels.
+With Substrate, people use their own AI assistant to send messages to the coding agents that a developer has open. Substrate is a Gliph product, written in Rust. It has two parts:
+
+- **The cloud** (`server/`, axum and PostgreSQL) runs on `substrate.gliph.sh` as its own Pushleft project.
+- **The relay** is the `substrate` CLI and daemon (`cli/`).
+
+Both parts compile the same wire contract (`proto/`). In Gliph, Substrate is a plugin on gliph.sh. It registers `/substrate` at runtime and posts into linked channels.
 
 ```
 tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
@@ -23,33 +22,30 @@ tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
 
 ## Identities
 
-| identity | what it is | credential |
+| Identity | Meaning | Credential |
 |---|---|---|
-| account | a person, by email | magic-link or Sign in with Gliph → `sub_session` cookie |
+| account | a person, by email | magic link or Sign in with Gliph → `sub_session` cookie |
 | machine | one paired daemon install | refresh token (Keychain) → 1 h access token |
-| endpoint | a project bound to (machine, herdr pane, agent session id) | none; addressed by the machine |
-| client | an MCP client a tester connected | OAuth access/refresh tokens, or a personal token |
+| endpoint | a project bound to (machine, Herdr pane, agent session id) | none; the machine addresses it |
+| client | an MCP client that a tester connected | OAuth access and refresh tokens, or a personal token |
 | reply token | one delivered message | random, scoped to (project, conversation, message) |
 
 ## Message lifecycle
 
-`stage` (message + execution):
+`stage` (message and execution):
 `pending_approval → approved → dispatched → accepted → submitted → working →
-(awaiting_sender) → completed` and the exits `rejected | expired | cancelled |
+(awaiting_sender) → completed`. The exit stages are `rejected | expired | cancelled |
 failed | interrupted | uncertain | held`.
 
-- `held` — a risk flag fired; manual approval is required even in auto relay.
-- `uncertain` — the daemon crashed between writing the dispatch record and
-  confirming the submit. Never retried automatically; the developer decides.
-- `completed` — the agent posted `substrate reply --final`. An agent that goes
-  idle without one leaves the message at `working` with `agent_idle=true`; the
-  summary says so and invents nothing.
+- `held`: a risk flag matched. The message needs manual approval, also in auto relay.
+- `uncertain`: the daemon stopped after it wrote the dispatch record and before Herdr confirmed the submit. Substrate does not retry it. The developer decides.
+- `completed`: the agent posted `substrate reply --final`. When an agent goes idle without a final reply, the message stays at `working` with `agent_idle=true`. The summary states this fact and adds nothing else.
 
 `deployment_stage`: `fix_committed → ci_running → ci_passed | ci_failed →
 deploying → deployed | deploy_failed → verified → ready_to_retest`, plus
-`not_deploying` and `unknown` (watcher went silent past its timeout).
+`not_deploying` and `unknown` (no report from the tracker before its timeout).
 
-Every transition is an event with a per-conversation `seq`.
+Each transition is an event with a `seq` per conversation.
 
 ## Relay protocol (daemon ⇄ cloud), v1
 
@@ -57,71 +53,71 @@ Every transition is an event with a per-conversation `seq`.
 
 1. `POST /relay/pair/start {"machine_name","platform","version"}` →
    `{"device_code","user_code","verification_uri","interval","expires_in"}`.
-   `user_code` is 8 letters `XXXX-XXXX`; it lives 10 minutes.
-2. The developer opens `verification_uri` signed in, checks the code, approves.
-3. Daemon polls `POST /relay/pair/token {"device_code"}` every `interval` s →
-   `{"error":"authorization_pending"}` (400) until approved, then
+   `user_code` has 8 letters (`XXXX-XXXX`) and expires after 10 minutes.
+2. The developer signs in, opens `verification_uri`, compares the code and approves.
+3. The daemon sends `POST /relay/pair/token {"device_code"}` every `interval` seconds.
+   The response is `{"error":"authorization_pending"}` (400) until approval, then
    `{"machine_id","refresh_token","access_token","expires_in"}`.
-4. `POST /relay/token {"refresh_token"}` → new `{"refresh_token","access_token","expires_in"}`.
-   The old refresh token stops working (rotation). A reused old refresh token
-   revokes the machine (theft signal).
+4. `POST /relay/token {"refresh_token"}` → a new `{"refresh_token","access_token","expires_in"}`.
+   The old refresh token stops working (rotation). A second use of an old refresh token
+   revokes the machine, because it shows a stolen credential.
 
-All other relay calls carry `Authorization: Bearer <access_token>`.
+All other relay calls send `Authorization: Bearer <access_token>`.
 
 ### WebSocket `GET /relay/ws`
 
-JSON text frames `{"t":"<type>", ...}`. The cloud pings every 25 s; the daemon
-reconnects with jittered backoff 1 s → 60 s.
+JSON text frames `{"t":"<type>", ...}`. The cloud sends a ping every 25 s. The daemon
+reconnects with a jittered backoff from 1 s to 60 s.
 
-daemon → cloud:
+Daemon → cloud:
 
-| t | fields | meaning |
+| t | Fields | Meaning |
 |---|---|---|
 | `hello` | `version`, `protocol:1`, `panes:[Pane]` | first frame; `panes` = `herdr agent list` |
-| `panes` | `panes:[Pane]` | the live pane inventory changed |
+| `panes` | `panes:[Pane]` | a change to the live list of panes |
 | `status` | `project_id`, `state` (`idle|working|blocked|done|unknown|offline|needs_rebind`) | endpoint state |
 | `ack` | `delivery_id`, `stage` (`accepted|submitted|working|uncertain|failed|agent_idle`), `detail?` | delivery progress |
-| `excerpt` | `message_id`, `text` | bounded terminal excerpt (developer-only, never sent to the tester) |
+| `excerpt` | `message_id`, `text` | a short terminal excerpt for the developer only; testers never get it |
 
-`Pane` = `{"pane_id","agent","agent_session","status","cwd","title"}` straight
+`Pane` = `{"pane_id","agent","agent_session","status","cwd","title"}`, copied
 from `herdr agent list` (`agent_session` = `.agent_session.value`).
 
-cloud → daemon:
+Cloud → daemon:
 
-| t | fields | meaning |
+| t | Fields | Meaning |
 |---|---|---|
-| `welcome` | `machine_id`, `projects:[Binding]` | after `hello` |
-| `bindings` | `projects:[Binding]` | a binding changed |
-| `deliver` | `delivery_id`, `message_id`, `project_id`, `envelope`, `reply_token`, `attachments:[{name,url,size,sha256}]` | deliver one message |
-| `cancel` | `delivery_id` | developer cancelled before submit |
+| `welcome` | `machine_id`, `projects:[Binding]` | the reply to `hello` |
+| `bindings` | `projects:[Binding]` | a change to a binding |
+| `deliver` | `delivery_id`, `message_id`, `project_id`, `envelope`, `reply_token`, `attachments:[{name,url,size,sha256}]` | one message to deliver |
+| `cancel` | `delivery_id` | the developer cancelled before the submit |
 
 `Binding` = `{"project_id","handle","pane_id","agent_session","cwd"}`.
 
-### Delivery rules (the daemon's contract)
+### Delivery rules for the daemon
 
-1. On `deliver`: write `dispatch/<message_id>.json` (state `received`), `ack accepted`.
-2. Check the pane: `herdr agent get <pane_id>`. If missing, or its
-   `agent_session.value` differs from the binding → `status needs_rebind`, keep
-   the record, do not submit. If `blocked` → `status blocked`, wait. If
-   `working` → wait (one in flight per project; projects run concurrently).
-3. Download attachments into `<workspace>/<project>/<message_id>/` with the
-   given safe names; verify size and sha256; files 0600, no symlinks followed.
-4. Replace the U+001F-delimited token `\u001fATTACH_DIR\u001f` in `envelope` with
-   that folder's absolute path (`proto::ATTACH_DIR`; the sanitizer strips
-   U+001F from tester text, so it cannot be forged). Reject an envelope
-   containing any other C0 control character except `\n` and `\t`.
-5. Mark the record `submitting`, then `herdr agent prompt <pane_id> <envelope>`
-   (no `--wait`; herdr bracketed-pastes and refuses a blocked agent). On success
-   mark `submitted`, `ack submitted`; then watch `herdr agent wait` / `get` and
-   `ack working`, and when it settles idle/done with no final reply, `ack
-   agent_idle` plus one `excerpt` (`herdr agent read --source recent-unwrapped --lines 120`, capped 8 KB).
-6. On restart, a record still in `submitting` → `ack uncertain`. Never resubmit.
-7. Write `dispatch/<message_id>.json` with the `reply_token` so `substrate
-   reply/progress/ask/deploy <message_id>` can find it.
+1. On `deliver`, write `dispatch/<message_id>.json` (state `received`) and send `ack accepted`.
+2. Run `herdr agent get <pane_id>` to check the pane:
+   - Pane missing, or its `agent_session.value` is not the bound session: send `status needs_rebind`, keep the record, do not submit.
+   - Agent `blocked`: send `status blocked` and wait.
+   - Agent `working`: wait. Each project has one message in flight. Different projects run at the same time.
+3. Download the attachments into `<workspace>/<project>/<message_id>/` with the
+   given safe names. Check the size and the sha256. Write the files with mode 0600 and do not follow symlinks.
+4. In `envelope`, replace the token `\u001fATTACH_DIR\u001f` with the absolute path of that folder
+   (`proto::ATTACH_DIR`). The sanitizer removes U+001F from tester text, so a tester cannot forge the token.
+   Reject an envelope that has any other C0 control character, except `\n` and `\t`.
+5. Set the record to `submitting`, then run `herdr agent prompt <pane_id> <envelope>`
+   without `--wait`. Herdr pastes the text as a bracketed paste. A blocked agent gets no input.
+   - On success, set `submitted` and send `ack submitted`.
+   - Use `herdr agent wait` and `get` to follow the agent, and send `ack working`.
+   - When the agent goes idle or done with no final reply, send `ack agent_idle` and one `excerpt`
+     (`herdr agent read --source recent-unwrapped --lines 120`, 8 KB maximum).
+6. On restart, a record in state `submitting` gets `ack uncertain`. Do not submit it again.
+7. Keep the `reply_token` in `dispatch/<message_id>.json`. The commands `substrate
+   reply/progress/ask/deploy <message_id>` use it.
 
 ### Agent reports (CLI → cloud, HTTPS)
 
-`POST /relay/report` with the machine bearer:
+`POST /relay/report` with the machine bearer token:
 
 ```json
 {"message_id":"m_…","reply_token":"…","kind":"progress|ask|reply|final|deploy",
@@ -130,55 +126,66 @@ cloud → daemon:
 ```
 
 Attachments: `POST /relay/report/attachment?message_id=&reply_token=` with the
-raw bytes and `X-Filename`; returns `{"attachment_id"}` to list in a report's
-`attachments`. The CLI only sends files inside the bound project's cwd after
-resolving symlinks, ≤ 10 MB.
+raw bytes and `X-Filename`. The response is `{"attachment_id"}`, for the `attachments` list of a report.
+The CLI sends only files of 10 MB or less from inside the bound project directory, after it resolves symlinks.
 
-The cloud checks the reply token against the message, scans the text for
-secrets (a hit holds the report for the developer), and turns links outside
-the Substrate domain and the project's retest allowlist into plain text.
+For each report, the cloud:
 
-### Deploy watching (daemon)
+1. Compares the reply token with the message.
+2. Scans the text for secrets. A match holds the report for the developer.
+3. Converts to plain text each link to a host outside the Substrate domain and the project's retest allowlist.
 
-`substrate deploy track <id> --commit <sha> [--ci-url <url>] [--env <name>]
-[--verify-url <url>]`: the daemon reports `fix_committed`, then polls every
-15 s with the developer's own tools — `gh run list --commit <sha> --json
-databaseId,status,conclusion,url,name` for GitHub Actions, `glab ci list`
-style for GitLab when `--ci-url` is a GitLab URL, and otherwise waits for the
-agent's own `substrate deploy status` calls. After a passing pipeline and
-`deployed`, a `--verify-url` GET that returns 2xx (and contains the short sha
-when `--expect-sha` is given) reports `verified` then `ready_to_retest`.
-Silence for 45 minutes reports `unknown`. The cloud never receives GitHub,
-GitLab or Pushleft credentials.
+### Deploy tracking (daemon)
 
-## MCP (`/mcp`, Streamable HTTP, protocol 2025-06-18)
+`substrate deploy track <id> --commit <sha> [--ci-url <url>] [--env <name>] [--verify-url <url>]`
+
+1. The daemon reports `fix_committed`.
+2. Every 15 s, it polls with the developer's own tools:
+   - GitHub Actions: `gh run list --commit <sha> --json databaseId,status,conclusion,url,name`.
+   - GitLab, when `--ci-url` is a GitLab URL: `glab ci list`.
+   - Other pipelines: the agent reports each stage with `substrate deploy status`.
+3. After a passed pipeline and `deployed`, the daemon sends a GET to `--verify-url`. A 2xx response
+   reports `verified`, then `ready_to_retest`. With `--expect-sha`, the response must also contain the short sha.
+4. After 45 minutes with no report, the daemon reports `unknown`.
+
+The cloud gets no GitHub, GitLab or Pushleft credentials.
+
+## MCP
+
+Endpoint `/mcp`, Streamable HTTP, protocol 2025-06-18.
 
 Tools: `list_projects`, `get_project`, `send_message`, `get_message`,
 `wait_for_update`, `reply`, `get_conversation`, `get_status`,
-`list_artifacts`, `create_upload_link`. Every message result carries the status
+`list_artifacts`, `create_upload_link`. Each message result has the status
 block (`stage`, `deployment_stage`, `terminal`, `summary`, `next_action`,
-`check_after_seconds`, `seq`, `new_events`, `links`, `question`). Agent-written
-text is only ever in an `agent_text` field.
+`check_after_seconds`, `seq`, `new_events`, `links`, `question`). Text that an agent wrote
+is only in `agent_text` fields.
 
 Auth: OAuth 2.1 with PKCE and dynamic client registration
 (`/.well-known/oauth-protected-resource`,
 `/.well-known/oauth-authorization-server`, `/oauth/register`,
-`/oauth/authorize`, `/oauth/token`). Clients that cannot do OAuth use a
-personal token from the invite page as `Authorization: Bearer sk_sub_…`.
+`/oauth/authorize`, `/oauth/token`). A client without OAuth support uses a
+personal token from the invite page, as `Authorization: Bearer sk_sub_…`.
 
 ## Gliph integration
 
-- **Sign in with Gliph**: `substrate.gliph.sh` sends the browser to gliph.sh's
-  own `/link.html` approval (the device-link flow, `platform=substrate`; gliph
-  accepts that redirect only when it equals its `-substrate-callback` flag).
-  One click on "continue"; Substrate redeems the code with PKCE, reads the
-  account's nick and email, signs the minted Gliph session straight out, and
-  matches the Substrate account by email.
-- **Agent channel**: Substrate connects to gliph.sh as the agent plugin
-  `substrate` (`GLIPH_PLUGIN_TOKEN`). A channel op adds it with `/invite substrate`;
-  then `/substrate link <project>` in that channel
-  mirrors that project's conversations into it as `[project]` lines, and
-  `/substrate approve|reject|send|status|mode` act on it from chat. A line
-  `@<project> text` in a linked channel, from a member or another agent plugin,
-  becomes a message to that project's agent (agent to agent); unless its
-  author is the developer, it waits for approval like any tester's.
+### Sign in with Gliph
+
+1. `substrate.gliph.sh` sends the browser to the `/link.html` approval page on gliph.sh
+   (the device-link flow, `platform=substrate`). Gliph accepts the redirect only when it is
+   the same as its `-substrate-callback` flag.
+2. The user clicks "continue" once.
+3. Substrate redeems the code with PKCE and gets the account's nick and email.
+4. Substrate signs out the new Gliph session at once, and finds the Substrate account by email.
+
+### Agent channel
+
+Substrate connects to gliph.sh as the agent plugin `substrate` (`GLIPH_PLUGIN_TOKEN`).
+
+1. A channel op adds the plugin with `/invite substrate`.
+2. `/substrate link <project>` in that channel shows the project's conversations there as `[project]` lines.
+3. `/substrate approve|reject|send|status|mode` act on the project from the chat.
+
+In a linked channel, a member or another agent plugin can write `@<project> text`. That line becomes
+a message to the project's agent, so one agent can send work to another. A message from anyone
+except the developer waits for approval, the same as a tester's message.

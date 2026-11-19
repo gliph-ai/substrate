@@ -311,10 +311,10 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     add_event(app, &conv, &mid, "human", &label, m.kind, &text,
         json!({"message_id": mid, "client": m.client_name, "attachments": names}), false).await?;
     let (sys, detail) = match stage {
-        "held" => (format!("Held for the developer: the message matched {}. Nothing reached the agent.", flags.join(", ")), "held"),
+        "held" => (format!("Held for the developer. It matched {}. The agent has not received it.", flags.join(", ")), "held"),
         "approved" if role == "owner" => ("Sent by the developer. Queued for the agent.".to_string(), "auto"),
-        "approved" => ("Auto relay is on. Queued for the agent without manual approval.".to_string(), "auto"),
-        _ => ("Waiting for the developer's approval. Nothing has reached the agent yet.".to_string(), "pending"),
+        "approved" => ("Auto relay is on. Queued for the agent without approval.".to_string(), "auto"),
+        _ => ("Waiting for the developer's approval. The agent has not received it yet.".to_string(), "pending"),
     };
     add_event(app, &conv, &mid, "system", "Substrate", "stage", &sys, json!({"message_id": mid, "stage": stage}), false).await?;
     audit(app, m.sender_id, &p.id, &format!("{label}{via}"), "message.received", &mid, detail).await;
@@ -331,9 +331,9 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str) -> Res
     let who = account_label(app, owner).await;
     let (from, to, text): (&[&str], &str, String) = match action {
         "approve" => (&["pending_approval", "held"], "approved", "Approved by the developer.".into()),
-        "reject" => (&["pending_approval", "held", "approved"], "rejected", "The developer declined this message. It was not delivered.".into()),
+        "reject" => (&["pending_approval", "held", "approved"], "rejected", "The developer declined this message. The agent did not get it.".into()),
         "cancel" => (&["approved", "dispatched", "accepted"], "cancelled", "Cancelled by the developer before the agent received it.".into()),
-        "retry" => (&["uncertain", "failed", "interrupted", "expired"], "approved", "The developer asked for it to be delivered again.".into()),
+        "retry" => (&["uncertain", "failed", "interrupted", "expired"], "approved", "The developer sent it again.".into()),
         _ => return Err(Fail::new(400, "unknown action")),
     };
     if !from.contains(&m.stage.as_str()) {
@@ -381,7 +381,7 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     }
     if role(app, pid, &m.sender_id).await?.is_none() {
         set_stage(app, &m.id, "cancelled").await?;
-        add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "Not delivered: the sender no longer has access to this project.", json!({"message_id": m.id, "stage": "cancelled"}), false).await?;
+        add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "Not delivered. The sender lost access to this project.", json!({"message_id": m.id, "stage": "cancelled"}), false).await?;
         return Box::pin(pump(app, pid)).await;
     }
 
@@ -470,35 +470,35 @@ pub async fn status_block(app: &AppInner, m: &Message, since: i64, tester: bool)
 /// only. Never claims more than the stage proves.
 pub fn summarize(m: &Message, online: bool, p: &Project, held_reply: bool) -> (String, &'static str, Option<i64>, bool) {
     if held_reply {
-        return ("The developer's agent replied; the developer is reviewing the reply before it is shown.".into(), "check_later", Some(600), false);
+        return ("The agent replied. The developer reviews the reply before you see it.".into(), "check_later", Some(600), false);
     }
     let dep = m.deploy_stage.as_str();
     match m.stage.as_str() {
         "pending_approval" => ("Delivered to Substrate. Waiting for the developer to approve it.".into(), "check_later", Some(300), false),
-        "held" => ("Delivered to Substrate. The developer must review it before it can go further.".into(), "check_later", Some(600), false),
-        "approved" if !online || p.machine_id.is_empty() => ("Approved. The developer's agent is offline; it will be delivered when it reconnects.".into(), "check_later", Some(600), false),
-        "approved" if p.state == "needs_rebind" => ("Approved. The developer needs to reconnect the project to its agent before it can be delivered.".into(), "check_later", Some(600), false),
+        "held" => ("Delivered to Substrate. The developer reviews it first.".into(), "check_later", Some(600), false),
+        "approved" if !online || p.machine_id.is_empty() => ("Approved. The developer's agent is offline. It gets the message when it reconnects.".into(), "check_later", Some(600), false),
+        "approved" if p.state == "needs_rebind" => ("Approved. The developer must reconnect the project to its agent first.".into(), "check_later", Some(600), false),
         "approved" => ("Approved and queued for the developer's agent.".into(), "wait", Some(60), false),
-        "dispatched" | "accepted" => ("Handed to the developer's computer; waiting for the agent to be free.".into(), "wait", Some(60), false),
-        "submitted" | "working" if m.agent_idle => ("The developer's agent stopped working on it but has not sent a reply yet.".into(), "check_later", Some(300), false),
+        "dispatched" | "accepted" => ("On the developer's computer. Waiting for the agent to be free.".into(), "wait", Some(60), false),
+        "submitted" | "working" if m.agent_idle => ("The developer's agent stopped without a reply.".into(), "check_later", Some(300), false),
         "submitted" | "working" => ("The developer's agent is working on it.".into(), "wait", Some(60), false),
         "awaiting_sender" => ("The developer's agent has a question for you.".into(), "answer_question", None, false),
-        "answered" => ("You answered the agent's question; your answer went as a new message in this conversation.".into(), "nothing", None, true),
-        "rejected" => ("The developer declined this message. It was not delivered.".into(), "nothing", None, true),
+        "answered" => ("You answered the agent's question. Your answer is a new message in this conversation.".into(), "nothing", None, true),
+        "rejected" => ("The developer declined this message. The agent did not get it.".into(), "nothing", None, true),
         "expired" => ("It expired before the developer's agent received it.".into(), "contact_developer", None, true),
         "cancelled" => ("It was cancelled before the developer's agent received it.".into(), "nothing", None, true),
-        "uncertain" => ("Delivery is unconfirmed: the developer's computer restarted mid-delivery. The developer will check.".into(), "contact_developer", None, false),
-        "failed" => ("Delivery failed. The developer has been told.".into(), "contact_developer", None, false),
+        "uncertain" => ("Delivery is unconfirmed. The developer's computer restarted during delivery.".into(), "contact_developer", None, false),
+        "failed" => ("Delivery failed. The developer can see the error.".into(), "contact_developer", None, false),
         "interrupted" => ("The agent stopped before finishing. The developer can resume it.".into(), "contact_developer", None, false),
         "completed" => match dep {
             "ready_to_retest" => ("The fix is live. Try it again.".into(), "retest", None, true),
             "verified" => ("The fix is deployed and verified. Try it again.".into(), "retest", None, true),
             "deployed" => ("The fix is deployed. Try it again.".into(), "retest", None, true),
-            "fix_committed" | "ci_running" | "ci_passed" | "deploying" => ("Fixed in code. It is on its way to the live app but not live yet.".into(), "wait", Some(120), false),
-            "ci_failed" => ("Fixed in code, but the build failed, so it is not live.".into(), "check_later", Some(900), false),
-            "deploy_failed" => ("Fixed in code, but the deploy failed, so it is not live.".into(), "check_later", Some(900), false),
-            "not_deploying" => ("Fixed in code but not deployed yet. Not ready to retest.".into(), "nothing", None, true),
-            "unknown" => ("Fixed in code. The deploy stopped reporting, so its state is unknown.".into(), "contact_developer", None, true),
+            "fix_committed" | "ci_running" | "ci_passed" | "deploying" => ("Fixed in code. The fix is on its way to the live app.".into(), "wait", Some(120), false),
+            "ci_failed" => ("Fixed in code. The build failed, so the fix is not live.".into(), "check_later", Some(900), false),
+            "deploy_failed" => ("Fixed in code. The deploy failed, so the fix is not live.".into(), "check_later", Some(900), false),
+            "not_deploying" => ("Fixed in code and not deployed yet. Wait before you retest.".into(), "nothing", None, true),
+            "unknown" => ("Fixed in code. The deploy state is unknown.".into(), "contact_developer", None, true),
             _ => ("The developer's agent replied.".into(), "nothing", None, true),
         },
         _ => ("In progress.".into(), "check_later", Some(300), false),

@@ -148,7 +148,7 @@ pub async fn login_post(State(app): State<App>, headers: HeaderMap, Form(f): For
         .execute(&app.db).await?;
     let link = format!("{}/auth/magic?t={t}", app.cfg.public_url);
     let body = format!(
-        "Sign in to Substrate:\n\n{link}\n\nThe link works once and expires in 15 minutes.\nIf you did not ask for it, ignore this email.\n"
+        "Sign in to Substrate:\n\n{link}\n\nThe link works once and expires in 15 minutes.\nDidn't ask for it? Ignore this email.\n"
     );
     if let Err(e) = app.mail.send(&email, "Your Substrate sign-in link", &body).await {
         tracing::error!(error = %e, "magic link mail");

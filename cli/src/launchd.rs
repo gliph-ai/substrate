@@ -41,7 +41,7 @@ pub fn plist(exe: &str, logs: &str, path_env: &str, server: &str) -> String {
 
 pub fn install(exe: &str, logs: &str, server: &str) -> Result<()> {
     if !cfg!(target_os = "macos") {
-        bail!("`daemon install` is macOS only for now; run `substrate daemon run` under your service manager");
+        bail!("`daemon install` works on macOS only. Run `substrate daemon run` from your service manager.");
     }
     // herdr and gh must be reachable from launchd's minimal environment.
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());

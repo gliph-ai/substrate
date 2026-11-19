@@ -81,6 +81,22 @@ pub async fn project_icon_file(State(app): State<App>, Path(pid): Path<String>) 
     }
 }
 
+/// Gliph's unicorn, wherever Gliph is named.
+fn gliph_mark(size: u32) -> Markup {
+    html! { img.logo src="/static/logos/gliph.png" alt="" width=(size) height=(size) style=(format!("width:{size}px;height:{size}px;border-radius:{}px", size / 4)); }
+}
+
+/// Shell commands with a copy button. The `$` prompt is drawn by CSS, so
+/// neither the button nor a hand selection copies it.
+fn cmd(lines: &[&str]) -> Markup {
+    html! {
+        div.code.copyable {
+            @for l in lines { span.ln { (l) } }
+            button.btn.small.copy type="button" data-copy=(lines.join("\n")) { "Copy" }
+        }
+    }
+}
+
 fn orb(class: &str) -> Markup {
     html! { span class=(format!("orb {class}")) aria-hidden="true" {} }
 }
@@ -191,15 +207,14 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                                 span.muted style="font-size:14px" { (a.label()) }
                                 form.inline method="post" action="/logout" { button.btn.small type="submit" { "Sign out" } }
                             } @else {
-                                a.links href="/login" style="color:var(--muted);text-decoration:none;font-size:14px" { "Log in" }
-                                a.btn.primary.small href="/login" { "Get started" }
+                                a.btn.primary.small href="/login" { "Console" }
                             }
                         }
                     }
                     main { (body) }
                     footer.foot {
                         span { "Substrate is part of " a href="https://gliph.sh" { "gliph.sh" } }
-                        span id="security" { "Approving a message is not giving your agent new permissions." }
+                        span id="security" { "Your agent keeps its own permissions when you approve a message." }
                     }
                 }
             }
@@ -232,16 +247,16 @@ pub async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Response
 }
 
 fn landing() -> Html<String> {
-    Html(layout("Your agents. Connected.", None, None, html! {
+    Html(layout("Let testers talk to your coding agent", None, None, html! {
         section style="padding:56px 0 28px" class="stack" {
-            h1.hero { "Your agents. Connected." br; span.grad { "A direct line to the agents building your software." } }
-            p.lead { "People talk to their own assistant. Their message reaches the Claude Code session you already have open, after you approve it, and the reply finds its way back." }
+            h1.hero { "Let testers talk to " br; span.grad { "your coding agent." } }
+            p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant." }
             div.between style="padding-top:8px" {
                 div.row {
-                    a.btn.primary href="/login" { "Get started free" }
-                    a.btn href="/auth/gliph" { span style="font-family:Georgia,serif;color:#FF7BA0;font-weight:700" { "g" } "Sign in with Gliph" }
+                    a.btn.primary href="/login" { "Console" }
+                    a.btn href="/auth/gliph" { (gliph_mark(18)) "Sign in with Gliph" }
                 }
-                a.muted href="#connect" style="text-decoration:none;font-size:14px" { span style="color:var(--text)" { "New: " } "works inside Gliph channels →" }
+                a.muted href="#connect" style="text-decoration:none;font-size:14px" { (gliph_mark(18)) " Use it from a Gliph channel" }
             }
         }
         section.stage aria-label="How an approval looks" {
@@ -250,7 +265,6 @@ fn landing() -> Html<String> {
                 (orb("xl"))
                 div.card.glow style="width:100%" {
                     div.row style="font-size:17px;font-weight:500" { "Needs approval " span.badge { "2" } }
-                    span.muted style="font-size:14px" { "Messages waiting before they reach your agents." }
                 }
                 div.card style="width:100%;box-shadow:0 0 0 1px var(--ring)" {
                     div.between {
@@ -262,7 +276,7 @@ fn landing() -> Html<String> {
             }
         }
         section id="connect" class="stack" style="align-items:center;padding:56px 0 16px" {
-            span.muted style="font-size:14px" { "Works with the assistant they already use" }
+            span.muted style="font-size:14px" { "Your testers use the assistant they already have" }
             div.row style="gap:36px;justify-content:center;font-size:19px;font-weight:500" {
                 span.row { img.logo.lg src="/static/logos/claude.svg" alt=""; "Claude" }
                 span.row { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" }
@@ -272,23 +286,23 @@ fn landing() -> Html<String> {
             }
         }
         section id="how" class="stack" style="padding:56px 0 16px" {
-            h2 { "From their chat" br; "to your terminal, and back." }
+            h2 { "Four steps from chat to fix" }
             div.grid {
-                div.card { span.mono style="color:#8FA8FF;font-size:12px" { "01" } h3 { "They ask their assistant" } span.muted { "Claude, ChatGPT or any MCP client calls Substrate with their words and screenshot." } }
-                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "On the web, with the CLI, or with /substrate approve in a Gliph channel. Or turn on auto relay." } }
-                div.card { span.mono style="color:var(--teal);font-size:12px" { "03" } h3 { "Your agent gets it" } span.muted { "The Rust relay dials out from your Mac and hands it to the Herdr pane already running. No open ports." } }
-                div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "They hear back" } span.muted { "Progress, questions, CI and deploy. Their assistant says when it's ready to retest." } }
+                div.card { span.mono style="color:#8FA8FF;font-size:12px" { "01" } h3 { "Testers ask their assistant" } span.muted { "They tell Claude, ChatGPT or another MCP client. It sends their words and screenshots to Substrate." } }
+                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "Approve on the web, in the CLI or with /substrate approve in Gliph. Auto relay skips this step." } }
+                div.card { span.mono style="color:var(--teal);font-size:12px" { "03" } h3 { "Your agent gets the message" } span.muted { "The relay on your Mac connects out to Substrate and types the message into your Herdr pane. You open no ports." } }
+                div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "Testers hear back" } span.muted { "They get progress, questions and CI and deploy updates, then a note when the fix is ready to retest." } }
             }
         }
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
             div.card {
                 h3 { "Connect an assistant" }
-                div.code { "https://substrate.gliph.sh/mcp" }
-                span.muted { "Add it as a custom connector in Claude and sign in once. In ChatGPT, developer mode creates it as an app." }
+                div.code.copyable { "https://substrate.gliph.sh/mcp" button.btn.small.copy type="button" data-copy="https://substrate.gliph.sh/mcp" { "Copy" } }
+                span.muted { "In Claude, add it as a custom connector and sign in once. In ChatGPT, turn on developer mode and create an app with it." }
             }
             div.card {
-                h3 { "Install the relay " span.muted style="font-weight:400" { "· Rust, macOS" } }
-                div.code { "$ curl -fsSL https://substrate.gliph.sh/install | sh\n$ substrate login\n$ substrate project add verna --pane w9P:p1\n$ substrate daemon install" }
+                h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
+                (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate project add verna --pane w9P:p1", "substrate daemon install"]))
             }
         }
     }).into_string())
@@ -313,18 +327,19 @@ pub fn login_page(_app: &AppInner, next: &str, err: Option<&str>) -> Html<String
         div.page-horizon {}
         div.narrow style="padding:48px 0 160px" class="stack" {
             div style="display:flex;justify-content:center;padding:12px 0 24px" { (orb("xl")) }
-            h1 style="text-align:center" { "Sign in to " span.grad { "Substrate" } }
+            h1 style="text-align:center;margin-bottom:16px" { "Sign in to " span.grad { "Substrate" } }
             div.card {
                 @if let Some(e) = err { div.flash.bad role="alert" { (e) } }
                 form method="post" action="/login" class="stack" {
                     input type="hidden" name="next" value=(next);
                     div.field { label for="email" { "Email" } input id="email" type="email" name="email" required autocomplete="email" placeholder="you@company.com"; }
-                    button.btn.primary type="submit" { "Send sign-in link" }
+                    div.row.pair {
+                        button.btn.primary type="submit" { "Send sign-in link" }
+                        a.btn href=(format!("/auth/gliph?next={}", urlencoding::encode(&next))) { (gliph_mark(18)) "Sign in with Gliph" }
+                    }
                 }
-                div.row.muted style="justify-content:center;font-size:14px" { "or" }
-                a.btn href=(format!("/auth/gliph?next={}", urlencoding::encode(&next))) { span style="font-family:Georgia,serif;color:#FF7BA0;font-weight:700" { "g" } "Sign in with Gliph" }
             }
-            p.faint style="text-align:center;font-size:13px" { "No password. We email you a link that works once." }
+            p.faint style="text-align:center;font-size:13px" { "We email you a link that works once." }
         }
     }).into_string())
 }
@@ -332,7 +347,7 @@ pub fn login_page(_app: &AppInner, next: &str, err: Option<&str>) -> Html<String
 pub fn check_email_page(email: &str) -> Html<String> {
     Html(layout("Check your email", None, None, html! {
         div.narrow style="padding:64px 0" class="stack" {
-            div style="display:flex;justify-content:center" { (orb("xl")) }
+            div style="display:flex;justify-content:center;padding:12px 0 24px" { (orb("xl")) }
             div.card { h1 { "Check your email" } p.muted { "We sent a sign-in link to " strong { (email) } ". It works once and expires in 15 minutes." } }
         }
     }).into_string())
@@ -343,7 +358,6 @@ pub fn magic_confirm_page(t: &str) -> Html<String> {
         div.narrow style="padding:64px 0" class="stack" {
             div.card {
                 h1 { "Finish signing in" }
-                p.muted { "Press the button to sign in to Substrate in this browser." }
                 form method="post" action="/auth/magic" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { "Sign in" } }
             }
         }
@@ -399,7 +413,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 div.card {
                     h3 { "Set up your first project" }
                     p.muted { "Install the relay on the Mac where your agent runs, sign it in, and bind a Herdr pane." }
-                    div.code { "$ curl -fsSL " (app.cfg.public_url) "/install | sh\n$ substrate login\n$ substrate herdr discover\n$ substrate project add <handle> --pane <pane-id>\n$ substrate daemon install" }
+                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate herdr discover", "substrate project add <handle> --pane <pane-id>", "substrate daemon install"]))
                 }
             }
             div.split {
@@ -494,7 +508,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
             @if let Some(secret) = &f.invite {
                 div.card.glow {
                     h3 { "Invitation link" }
-                    p.muted { "Send this to your tester. It is shown once; Substrate keeps only a hash." }
+                    p.muted { "Send this to your tester. You see it only once." }
                     div.secret { (format!("{}/i/{}", app.cfg.public_url, secret)) }
                     div.row { button.btn.small type="button" data-copy=(format!("{}/i/{}", app.cfg.public_url, secret)) { "Copy link" } }
                 }
@@ -502,7 +516,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
             div.between style="padding:8px 4px" {
                 div.row style="gap:16px;align-items:center" { (picon(&p.id, &p.name, &p.icon_etag, 56)) div {
                     h1 { (p.name) }
-                    div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "—" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
+                    div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "none" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
                 } }
                 @if owner {
                     div.row { a.btn href="#invite" { "Invite a tester" } }
@@ -520,7 +534,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 div.card.attention {
                     h3 { "The agent's pane is gone" }
                     p style="color:#E4D9C4;margin:0" { "Herdr pane " span.mono { (p.pane_id) } " closed or now runs a different session. Messages stay queued; nothing goes to whatever replaced it. Bind the project to its new pane:" }
-                    div.code { "$ substrate herdr discover\n$ substrate project bind " (p.handle) " <pane-id>" }
+                    (cmd(&["substrate herdr discover", &format!("substrate project bind {} <pane-id>", p.handle)]))
                 }
             }
             div.grid.tight {
@@ -536,16 +550,16 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             section.card.attention {
                                 div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
                                 div style="font-size:26px;font-weight:500;letter-spacing:-.02em" { "Auto relay is on" }
-                                p style="color:#E4D9C4;margin:0" { "Incoming messages are forwarded without manual approval. Flagged messages still wait for you, and your agent's own permission prompts stay on." }
+                                p style="color:#E4D9C4;margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
                                 form method="post" action=(format!("/p/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { "Turn off auto relay" } }
                             }
                         } @else {
                             section.card {
                                 div.between { h3 { "Relay mode: approval required" } span.tag { "default" } }
-                                p.muted style="margin:0" { "Every message waits for you. Auto relay forwards messages without approval: it does not give your agent any new permissions, and flagged messages still wait." }
-                                form method="post" action=(format!("/p/{pid}/mode")) class="row" data-confirm="Turn on auto relay? Messages from testers will reach your agent without your approval." {
+                                p.muted style="margin:0" { "Every message waits for your approval. Auto relay sends messages without it. Flagged messages still wait." }
+                                form method="post" action=(format!("/p/{pid}/mode")) class="row" data-confirm="Turn on auto relay? Testers' messages reach your agent without your approval." {
                                     (csrf(&a)) input type="hidden" name="mode" value="auto";
-                                    label.sr for="minutes" { "For how long" }
+                                    label.sr for="minutes" { "Duration" }
                                     select id="minutes" name="minutes" style="width:auto" { option value="60" { "for 1 hour" } option value="480" selected { "for 8 hours" } option value="0" { "until I turn it off" } }
                                     input type="hidden" name="confirm" value="yes";
                                     button.btn type="submit" { "Turn on auto relay" }
@@ -569,14 +583,14 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                     }
                                 }
                             }
-                            span.faint style="font-size:12px" { "Trusted testers' messages skip approval. The ring shows who." }
+                            span.faint style="font-size:12px" { "Messages from trusted testers skip approval. A ring marks them." }
                         }
                     }
                 }
             }
             section id="conversations" class="list" {
                 div.label { "Conversations" }
-                @if convs.is_empty() { div.item { span.muted { "Nothing yet." } } }
+                @if convs.is_empty() { div.item { span.muted { "No conversations yet." } } }
                 @for (cid, title, upd, stage, from, client, dep) in &convs {
                     a.item href=(format!("/c/{cid}")) {
                         span.l { (stage_tag(stage)) span { (truncate(title, 80)) } @if !dep.is_empty() { span.tag.ok { (dep.replace('_', " ")) } } }
@@ -588,10 +602,10 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 div.split {
                     section.main.card id="invite" {
                         h3 { "Invite a tester" }
-                        p.muted style="margin:0" { "They get access to this project only: send messages and screenshots, read replies. They can't change bindings, modes or anything on your machine." }
+                        p.muted style="margin:0" { "Testers can send messages and screenshots to this project and read replies. They can't change its settings or your machine." }
                         form method="post" action=(format!("/p/{pid}/invites")) class="grid" style="align-items:end" {
                             (csrf(&a))
-                            div.field { label for="label" { "Who is it for" } input id="label" type="text" name="label" placeholder="Sarah" maxlength="64"; }
+                            div.field { label for="label" { "Tester's name" } input id="label" type="text" name="label" placeholder="Sarah" maxlength="64"; }
                             div.field { label for="days" { "Expires" } select id="days" name="days" { option value="1" { "in 1 day" } option value="7" { "in 7 days" } option value="14" selected { "in 14 days" } option value="30" { "in 30 days" } } }
                             div.field { label for="uses" { "Uses" } select id="uses" name="max_uses" { option value="1" selected { "one person" } option value="5" { "up to 5 people" } option value="25" { "up to 25 people" } } }
                             button.btn.primary type="submit" { "Create link" }
@@ -612,9 +626,9 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                         form method="post" action=(format!("/p/{pid}/settings")) class="stack" {
                             (csrf(&a))
                             div.field { label for="name" { "Name" } input id="name" type="text" name="name" value=(p.name) maxlength="64"; }
-                            div.field { label for="desc" { "What testers see" } textarea id="desc" name="description" maxlength="500" { (p.description) } }
-                            div.field { label for="hosts" { "Retest URLs testers may be sent to (hosts, comma-separated)" } input id="hosts" type="text" name="retest_hosts" value=(p.retest_hosts) placeholder="verna.app, staging.verna.app"; }
-                            label.row style="color:var(--text-2);font-size:14px" { input type="checkbox" name="ci_public" value="1" checked[p.ci_public]; "Testers may see raw CI links" }
+                            div.field { label for="desc" { "Description for testers" } textarea id="desc" name="description" maxlength="500" { (p.description) } }
+                            div.field { label for="hosts" { "Hosts for retest links, comma-separated" } input id="hosts" type="text" name="retest_hosts" value=(p.retest_hosts) placeholder="verna.app, staging.verna.app"; }
+                            label.row style="color:var(--text-2);font-size:14px" { input type="checkbox" name="ci_public" value="1" checked[p.ci_public]; "Show CI links to testers" }
                             button.btn type="submit" { "Save" }
                         }
                         div.inset style="font-size:13px" {
@@ -815,7 +829,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
             div.side.stack {
                 @if let Some(s) = &status {
                     div.card {
-                        span.muted style="font-size:13px" { @if owner { "What the tester's assistant sees" } @else { "Status" } }
+                        span.muted style="font-size:13px" { @if owner { "Status for the tester's assistant" } @else { "Status" } }
                         dl.kv.mono style="font-size:12.5px" {
                             dt { "stage" } dd { (s["stage"].as_str().unwrap_or("")) }
                             @if let Some(d) = s["deployment_stage"].as_str() { dt { "deployment" } dd { (d) } }
@@ -829,13 +843,13 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                     dl.kv {
                         dt { "Project" } dd.row style="gap:8px" { (picon(&p.id, &p.name, &p.icon_etag, 18)) (p.name) }
                         dt { "Machine" } dd { (machine.unwrap_or_else(|| "none".into())) }
-                        dt { "Pane" } dd.mono { (if p.pane_id.is_empty() { "—".to_string() } else { p.pane_id.clone() }) }
+                        dt { "Pane" } dd.mono { (if p.pane_id.is_empty() { "none".to_string() } else { p.pane_id.clone() }) }
                         dt { "Agent" } dd { (logo(agent_logo(&p.agent), "")) " " (agent_label(&p.agent)) }
                         @if let Some(m) = msgs.first() { dt { "Sender" } dd { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (m.client_name) } }
                     }
                 }
                 @if !p.gliph_channel.is_empty() {
-                    div.card { div.row style="font-size:14px" { span style="width:28px;height:28px;border-radius:8px;background:#1A2138;color:#FF7BA0;display:inline-flex;align-items:center;justify-content:center;font-family:Georgia,serif" { "g" } "Mirrored to its Gliph channel" } }
+                    div.card { div.row style="font-size:14px" { (gliph_mark(28)) "Linked to a Gliph channel" } }
                 }
             }
         }
@@ -872,7 +886,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                     div.body style="color:var(--text-2)" { (text) }
                     @if attention { @if let Some(m) = m {
                         @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
-                        p.muted style="margin:0;font-size:14px" { "This is exactly what your agent will receive:" }
+                        p.muted style="margin:0;font-size:14px" { "Your agent gets this text:" }
                         div.envelope { (envelope_markup(&m.envelope)) }
                         div.row {
                             form.inline method="post" action=(format!("/m/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { "Approve" } }
@@ -881,7 +895,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                     } }
                     @if owner && open { @if let Some(m) = m {
                         @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/m/{}/cancel", m.id)) { (csrf(a)) button.btn.small type="submit" { "Cancel delivery" } } }
-                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? If the agent already received it, it will see it twice." { (csrf(a)) button.btn.small type="submit" { "Deliver again" } } }
+                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? The agent may get it twice." { (csrf(a)) button.btn.small type="submit" { "Deliver again" } } }
                     } }
                 }
             }
@@ -1081,7 +1095,7 @@ pub async fn upload_get(State(app): State<App>, Path(t): Path<String>) -> Result
     Ok(Html(layout("Upload files", None, None, html! {
         div.narrow style="padding:48px 0" class="stack" {
             h1 { "Upload files for " span.grad { (p.name) } }
-            p.lead { "Screenshots, PDFs, logs or text files, up to 10 MB each. Then go back to your assistant and say they're uploaded." }
+            p.lead { "Screenshots, PDFs, logs or text files, up to 10 MB each. Then tell your assistant they're uploaded." }
             form.card method="post" enctype="multipart/form-data" {
                 label for="f" { "Files" }
                 input id="f" type="file" name="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,.md,.log,.txt" required;
@@ -1132,7 +1146,7 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
             (picon(&p.id, &p.name, &p.icon_etag, 72))
             h1 style="font-size:clamp(34px,5vw,46px)" { (owner_name) " invited you to test " span.grad { (name) } "." }
             @if !p.description.is_empty() { p.lead { (p.description) } }
-            p.lead { "Tell your own AI assistant what you find. It passes your words to the agent building " (name) ", and tells you when a fix is ready to try." }
+            p.lead { "Tell your own AI assistant what you find. Your words go to the agent building " (name) ", and you hear when a fix is ready to try." }
             div.row { span.pill { "Send feedback and screenshots" } span.pill { "Read replies" } span.pill { "Expires " (exp.format("%b %d")) } }
             @if dead {
                 div.card.danger { h3 { "This invitation can't be used" } p.muted { "It expired, was revoked, or has been used. Ask " (owner_name) " for a new one." } }
@@ -1149,7 +1163,7 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
                         input id="em" type="email" name="email" required placeholder="you@example.com" style="flex:1 1 240px;width:auto";
                         button.btn.primary type="submit" { "Send sign-in link" }
                     }
-                    a href=(format!("/auth/gliph?next=/i/{t}")) style="font-size:14px;color:#BFC8FF;text-decoration:none" { "Already on Gliph? Sign in with Gliph" }
+                    a href=(format!("/auth/gliph?next=/i/{t}")) class="row" style="font-size:14px;color:#BFC8FF;text-decoration:none" { (gliph_mark(18)) "Already on Gliph? Sign in with Gliph" }
                 }
             }
             (assistant_steps(&app))
@@ -1164,8 +1178,8 @@ fn assistant_steps(app: &AppInner) -> Markup {
         div.card {
             div.row { span.badge { "2" } h3 { "Add Substrate to your assistant" } }
             div.grid {
-                div.inset.stack style="box-shadow:0 0 0 1px #D97757" { div.row style="font-weight:500" { img.logo.lg src="/static/logos/claude.svg" alt=""; "Claude" } span.muted style="font-size:13px" { "Settings › Connectors › Add custom connector. Paste the address and sign in. Works on Free (one connector), Pro, Max, Team and Enterprise." } }
-                div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" } span.muted style="font-size:13px" { "Settings › Apps › Advanced settings › Developer mode, then Create app with this address. Developer mode is on Business, Enterprise and Edu (an admin turns it on); some Plus and Pro accounts have it." } }
+                div.inset.stack style="box-shadow:0 0 0 1px #D97757" { div.row style="font-weight:500" { img.logo.lg src="/static/logos/claude.svg" alt=""; "Claude" } span.muted style="font-size:13px" { "Settings › Connectors › Add custom connector. Paste the address and sign in. Available on Free (one connector), Pro, Max, Team and Enterprise." } }
+                div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" } span.muted style="font-size:13px" { "Settings › Apps › Advanced settings › Developer mode, then create an app with this address. Business, Enterprise and Edu have it after an admin turns it on. Some Plus and Pro accounts have it too." } }
                 div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/copilot.svg" alt=""; "Other clients" } span.muted style="font-size:13px" { "Claude Code: " span.mono { "claude mcp add --transport http substrate " (url) } ". Others: OAuth, or a personal token from " a href="/connect" { "Connect" } "." } }
             }
             div.row { span.code style="flex:1 1 280px" { (url) } button.btn type="button" data-copy=(url) { "Copy" } }
@@ -1200,7 +1214,7 @@ pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<Flas
         div.narrow.stack style="padding:16px 0 48px" {
             @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
             h1 { "Connect your " span.grad { "assistant" } }
-            p.lead { "Add Substrate once. Then just tell your assistant what you found." }
+            p.lead { "Add Substrate once. Then tell your assistant what you found." }
             (assistant_steps(&app))
             div.card {
                 h3 { "Personal token" }
@@ -1253,7 +1267,7 @@ pub fn consent_page(a: &Account, client: &str, q: &AuthorizeQ, projects: &[(Stri
                     li { "read the status and replies of your own messages" }
                 }
                 p.muted style="margin:0;font-size:14px" { "It can't change any project, see other people's messages, or reach anyone's computer." }
-                @if projects.is_empty() { div.inset { "You have no projects yet. Open an invitation link first; access follows automatically." } }
+                @if projects.is_empty() { div.inset { "You have no projects yet. Open an invitation link first." } }
                 @else { div.stack { @for (n, h, r) in projects { div.inset.between { span { (n) span.faint.mono { " " (h) } } span.tag { (r) } } } } }
                 form method="post" action="/oauth/authorize" class="row" {
                     (csrf(a))
@@ -1320,7 +1334,7 @@ pub async fn pair_post(State(app): State<App>, headers: HeaderMap, User(a): User
     }
     audit(&app, &a.id, "", &a.label(), &format!("pairing.{status}"), &f.code, "").await;
     Ok(Html(layout("Paired", Some(&a), None, html! {
-        div.narrow.stack style="padding:48px 0" { div.card { h1 { @if status == "approved" { "Paired" } @else { "Denied" } } p.muted { @if status == "approved" { "Go back to your terminal; the relay is signing in." } @else { "The relay was refused. Nothing was signed in." } } } }
+        div.narrow.stack style="padding:48px 0" { div.card { h1 { @if status == "approved" { "Paired" } @else { "Denied" } } p.muted { @if status == "approved" { "Go back to your terminal." } @else { "The relay can't sign in." } } } }
     }).into_string()).into_response())
 }
 
@@ -1333,12 +1347,12 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
     Ok(Html(layout("Machines", Some(&a), None, html! {
         div.stack style="padding:12px 0 48px" {
             h1 { "Machines" }
-            @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } div.code { "$ curl -fsSL " (app.cfg.public_url) "/install | sh\n$ substrate login" } } }
+            @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login"])) } }
             @for (mid, name, platform, version, seen, panes) in &ms {
                 div.card {
                     div.between {
                         div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
-                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops at once and its projects stop receiving messages." { (csrf(&a)) button.btn.small.danger type="submit" { "Sign out" } }
+                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { "Sign out" } }
                     }
                     span.muted style="font-size:13px" { @if app.machine_online(mid) { "Online now." } @else if let Some(s) = seen { "Last seen " (ago(s)) " ago." } @else { "Never connected." } }
                     @if let Some(list) = panes.as_array() { @if !list.is_empty() {

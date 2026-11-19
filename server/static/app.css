@@ -174,3 +174,8 @@ table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last
 .picon { display: inline-flex; flex: none; border-radius: 22%; object-fit: cover; background: var(--card-2); }
 .picon.tile { align-items: center; justify-content: center; font-weight: 600; color: #fff;
   background: linear-gradient(135deg, #3B5BFF, #7B2CFF 60%, #C04BFF); }
+.row.pair > .btn { flex: 1 1 180px; }
+.code.copyable { position: relative; padding-right: 76px; }
+.code .ln { display: block; }
+.code .ln::before { content: "$ "; color: var(--muted); user-select: none; }
+.code .copy { position: absolute; top: 8px; right: 8px; }

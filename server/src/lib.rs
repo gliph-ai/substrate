@@ -42,6 +42,7 @@ static STATIC: &[(&str, &str, &[u8])] = &[
     ("logos/cursor.svg", "image/svg+xml", include_bytes!("../static/logos/cursor.svg")),
     ("logos/github-actions.svg", "image/svg+xml", include_bytes!("../static/logos/github-actions.svg")),
     ("logos/gitlab.svg", "image/svg+xml", include_bytes!("../static/logos/gitlab.svg")),
+    ("logos/gliph.png", "image/png", include_bytes!("../static/logos/gliph.png")),
 ];
 
 async fn static_file(Path(p): Path<String>) -> Response {
