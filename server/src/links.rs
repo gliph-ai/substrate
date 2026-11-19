@@ -263,6 +263,13 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
     }
     let host = app.cfg.host();
     let live = !revoked && l.expires_at > now();
+    let (sent, active, done, shipped): (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE kind <> 'answer'),
+                count(*) FILTER (WHERE stage IN ('approved','dispatched','accepted','submitted','working','awaiting_sender')),
+                count(*) FILTER (WHERE stage = 'completed'),
+                count(*) FILTER (WHERE deploy_stage IN ('deployed','verified','ready_to_retest'))
+         FROM messages WHERE sender_id=$1",
+    ).bind(&acct).fetch_one(&app.db).await?;
     Ok(Html(layout("Access links", Some(&a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
             div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { (l.label) } }
@@ -285,6 +292,13 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
                     @if l.auto { span.tag.warn { "no approval" } }
                 }
                 span.faint style="font-size:13px" { @match l.last_used_at { Some(t) => { "Used " (crate::web::ago_text(&t)) }, None => { "Not used yet" } } " · expires " (l.expires_at.format("%b %d")) }
+            }
+            div.grid.tight {
+                div.card.stat { span.k { (ic("message")) "Messages" } span.big { (sent) } }
+                div.card.stat { span.k { (ic("clock")) "Waiting for you" } span.big style=(if l.waiting > 0 { "color:var(--amber)" } else { "" }) { (l.waiting) } }
+                div.card.stat { span.k { (ic("zap")) "With the agent" } span.big { (active) } }
+                div.card.stat { span.k { (ic("check")) "Completed" } span.big.grad { (done) } }
+                div.card.stat { span.k { (ic("rocket")) "Deployed" } span.big { (shipped) } }
             }
             @if !waiting.is_empty() {
                 div.card.glow.stack id="waiting" {

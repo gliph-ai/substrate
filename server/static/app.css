@@ -272,15 +272,6 @@ html:has(.chat-body) { overflow: hidden; height: 100%; }
 .seg-btn:hover { color: var(--text); background: #ffffff0a; }
 .seg-btn.on { background: var(--electric); color: #fff; font-weight: 600; box-shadow: var(--electric-glow), inset 0 1px 0 #ffffff33; }
 .seg-btn.prod.on { background: linear-gradient(135deg, #FF8A3D, #FF4F7B); box-shadow: 0 0 0 1px #FF8A5A66, 0 4px 18px #FF4F7B55, inset 0 1px 0 #ffffff33; }
-.deploy-track { align-self: flex-start; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; color: var(--faint); padding: 2px 4px; }
-.deploy-track .step { display: inline-flex; align-items: center; gap: 5px; }
-.deploy-track .step.done { color: var(--teal); }
-.deploy-track .step.run { color: var(--text); }
-.deploy-track .step.run .mark { color: #D97757; animation: tag-pulse 1.2s ease-in-out infinite; }
-.deploy-track .step.wait { color: var(--text-2); }
-.deploy-track .step.fail { color: var(--red); }
-.deploy-track .sep { color: var(--faint); }
-.deploy-track .dt-note { color: var(--muted); font-family: var(--display); margin-left: 8px; }
 .status-line { align-self: flex-start; display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; color: var(--muted); padding: 2px 4px; }
 .status-line[hidden] { display: none; }
 .status-line .spin { width: 1ch; color: #D97757; }
@@ -375,7 +366,6 @@ a.me { text-decoration: none; gap: 8px; }
 .ev-line .row { margin-left: 30px; }
 .ev-line .deploy { margin-left: 30px; }
 .timeline { gap: 8px; }
-.deploy-track.card { padding: 12px 16px; font-size: 13px; gap: 10px; }
 
 /* Machines list: one icon per agent, the agent's mark on its corner, a tip on hover. */
 .agents-strip { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 520px; }
@@ -384,3 +374,22 @@ a.me { text-decoration: none; gap: 8px; }
 .agents-strip .mini .agent-mark img { width: 11px; height: 11px; }
 .agents-strip .mini[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); white-space: nowrap;
   padding: 5px 9px; border-radius: 8px; background: #1C1D22; color: var(--text); font-size: 12px; box-shadow: 0 6px 20px #000a, 0 0 0 1px #8F7BFF44; z-index: 5; pointer-events: none; }
+
+/* Deploy track: a row of steps; each has its own icon until it is done, then a check. */
+.deploy-track { align-self: flex-start; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); padding: 4px 2px; }
+.deploy-track .step { display: inline-flex; align-items: center; gap: 6px; }
+.deploy-track .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--card-2); }
+.deploy-track .mark svg { width: 13px; height: 13px; }
+.deploy-track .step.done { color: var(--teal); }
+.deploy-track .step.done .mark { background: var(--teal-bg); }
+.deploy-track .step.run { color: var(--text); }
+.deploy-track .step.run .mark { background: var(--electric); color: #fff; box-shadow: var(--electric-glow); animation: tag-pulse 1.2s ease-in-out infinite; }
+.deploy-track .step.wait { color: var(--text-2); }
+.deploy-track .step.fail { color: var(--red); }
+.deploy-track .step.fail .mark { background: var(--red-bg); }
+.deploy-track .sep { display: inline-grid; color: var(--faint); }
+.deploy-track .sep svg { width: 14px; height: 14px; }
+.deploy-track .dt-note { color: var(--muted); margin-left: 6px; }
+/* Active now stands apart from history. */
+.list.active-now { background: linear-gradient(180deg, #11163A, #0E0F1C); box-shadow: inset 0 0 0 1px #3B5BFF33; }
+.list.active-now .item:hover { background: #1A2050; }

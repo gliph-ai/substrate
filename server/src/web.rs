@@ -111,6 +111,12 @@ pub(crate) fn ic(name: &str) -> Markup {
         "folder" => r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>"#,
         "clock" => r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#,
         "flask" => r#"<path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>"#,
+        "git-commit" => r#"<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>"#,
+        "push" => r#"<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>"#,
+        "cog" => r#"<circle cx="12" cy="12" r="3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="m4.93 4.93 2.12 2.12"/><path d="m16.95 16.95 2.12 2.12"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="m4.93 19.07 2.12-2.12"/><path d="m16.95 7.05 2.12-2.12"/>"#,
+        "rocket" => r#"<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>"#,
+        "globe" => r#"<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>"#,
+        "chevron" => r#"<path d="m9 18 6-6-6-6"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -556,7 +562,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 }
             }
             @if !owned.is_empty() {
-                div.list {
+                div.list.active-now {
                     div.label { (ic("zap")) "Active now" }
                     @if active.is_empty() { div.item { span.muted { "Nothing is with an agent right now." } } }
                     @for m in &active { (request_row(m, &owned)) }
@@ -1154,13 +1160,13 @@ pub(crate) fn deploy_track(stage: &str) -> Markup {
         "verified" | "ready_to_retest" => (6, "done"),
         _ => return html! {},
     };
-    let steps = ["Commit", "Checks", "Push", "CI", "Deploy", "Live"];
+    let steps = [("Commit", "git-commit"), ("Checks", "flask"), ("Push", "push"), ("CI", "cog"), ("Deploy", "rocket"), ("Live", "globe")];
     html! {
-        div.deploy-track.card {
-            @for (i, s) in steps.iter().enumerate() {
+        div.deploy-track {
+            @for (i, (s, icon)) in steps.iter().enumerate() {
                 @let state = if i < at { "done" } else if i == at { how } else { "todo" };
-                span class=(format!("step {state}")) { span.mark { (match state { "done" => "✓", "fail" => "✕", "run" => "✻", _ => "·" }) } (s) }
-                @if i + 1 < steps.len() { span.sep { "›" } }
+                span class=(format!("step {state}")) { span.mark { (ic(match state { "done" => "check", "fail" => "x", _ => icon })) } (s) }
+                @if i + 1 < steps.len() { span.sep { (ic("chevron")) } }
             }
         }
     }

@@ -206,7 +206,19 @@ document.addEventListener("submit", (e) => {
   }
 
   // The deploy track: one line of steps from the stage the agent and CI report.
-  const STEPS = ["Commit", "Checks", "Push", "CI", "Deploy", "Live"];
+  // Each step has its icon until done, then a check (the same marks as the dashboard).
+  const SVG = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + "</svg>";
+  const ICON = {
+    commit: '<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>',
+    checks: '<path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>',
+    push: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+    ci: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/>',
+    deploy: '<path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+    live: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>', x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', chevron: '<path d="m9 18 6-6-6-6"/>',
+  };
+  const svgEl = (k) => { const t = document.createElement("template"); t.innerHTML = SVG(ICON[k]); return t.content.firstChild; }; // nosemgrep: constant markup only
+  const STEPS = [["Commit", "commit"], ["Checks", "checks"], ["Push", "push"], ["CI", "ci"], ["Deploy", "deploy"], ["Live", "live"]];
   const AT = { committing: [0, "run"], running_checks: [1, "run"], pushing: [2, "run"], fix_committed: [3, "wait"], ci_running: [3, "run"],
     ci_passed: [4, "wait"], ci_failed: [3, "fail"], deploying: [4, "run"], deployed: [5, "wait"], deploy_failed: [4, "fail"], verified: [6, "done"], ready_to_retest: [6, "done"] };
   const dt = { el: null };
@@ -216,29 +228,15 @@ document.addEventListener("submit", (e) => {
     const [at, how] = AT[stage];
     if (!dt.el) dt.el = el("div", "deploy-track");
     dt.el.replaceChildren();
-    STEPS.forEach((s, i) => {
+    STEPS.forEach(([s, k], i) => {
       const state = i < at ? "done" : i === at ? how : "todo";
-      const step = el("span", "step " + state);
-      step.append(el("span", "mark", state === "done" ? "✓" : state === "fail" ? "✕" : state === "run" ? "✻" : "·"), s);
+      const mark = el("span", "mark"); mark.append(svgEl(state === "done" ? "check" : state === "fail" ? "x" : k));
+      const step = el("span", "step " + state); step.append(mark, s);
       dt.el.append(step);
-      if (i < STEPS.length - 1) dt.el.append(el("span", "sep", "›"));
+      if (i < STEPS.length - 1) { const sep = el("span", "sep"); sep.append(svgEl("chevron")); dt.el.append(sep); }
     });
     if (text) dt.el.append(el("span", "dt-note", text));
     log.append(dt.el);
-  }
-
-  // One notice above the composer. warn stays (the agent is offline); bad is an error
-  // that goes after a few seconds or on its ×.
-  let noticeTimer = null;
-  function notice(text, kind) {
-    const b = $("chat-banner");
-    clearTimeout(noticeTimer);
-    if (!text) { b.hidden = true; return; }
-    b.className = "chat-banner notice " + (kind || "warn");
-    $("chat-banner-text").textContent = text;
-    $("chat-banner-x").hidden = kind !== "bad";
-    b.hidden = false;
-    if (kind === "bad") noticeTimer = setTimeout(() => notice(S.offlineText || ""), 6000);
   }
 
   const project = () => S.projects.find((p) => p.project_id === S.pid);
