@@ -1710,12 +1710,18 @@ pub async fn machine_detail(State(app): State<App>, User(a): User, Path(mid): Pa
         div.stack style="padding:12px 0 48px" {
             div.crumbs { a href="/machines" style="text-decoration:none" { "Machines" } span.sep { "/" } span.muted { (name) } }
             div.between {
-                div.row style="gap:14px" { span.ev-av.mark style="width:44px;height:44px" { (ic("monitor")) } h1 style="margin:0" { (name) } }
+                div.row style="gap:14px" {
+                    span.ev-av.mark style="width:44px;height:44px" { (ic("monitor")) }
+                    div {
+                        h1 style="margin:0" { (name) }
+                        div.row style="gap:8px;font-size:14px;color:var(--text-2)" {
+                            span class=(format!("dot {}", if online { "ok" } else { "" })) {}
+                            @if online { "Connected" } @else if let Some(s) = &seen { "Last seen " (ago_text(s)) } @else { "Never connected" }
+                            span.faint { "· " (platform) " · relay " (version) }
+                        }
+                    }
+                }
                 form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
-            }
-            div.card.row style="gap:16px;flex-wrap:wrap;font-size:14px" {
-                span.row { span class=(format!("dot {}", if online { "ok" } else { "" })) {} @if online { "Connected" } @else if let Some(s) = &seen { "Last seen " (ago_text(s)) } @else { "Never connected" } }
-                span.faint { (platform) " · relay " (version) }
             }
             @for (space, list) in spaces(&panes) {
                 div.list {
