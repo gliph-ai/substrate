@@ -224,7 +224,8 @@ table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last
 .code .copy { position: absolute; top: 8px; right: 8px; }
 
 /* Chat: the tester's web chat. Sidebar of projects and conversations, a log, a composer. */
-.chat-body { height: 100dvh; overflow: hidden; }
+.chat-body { height: 100dvh; overflow: hidden; overscroll-behavior: none; }
+html:has(.chat-body) { overflow: hidden; height: 100%; }
 .chat { display: grid; grid-template-columns: 280px 1fr; height: 100dvh; }
 .chat-side { background: var(--card); padding: 18px 14px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 .chat-brand { padding: 2px 6px 10px; }

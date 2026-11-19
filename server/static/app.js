@@ -374,7 +374,9 @@ document.addEventListener("submit", (e) => {
     if (p && p.description) e.append(el("p", "about", p.description));
     e.append(el("p", "muted", "Report a bug, ask a question or request a change. " + dev() + " sees every message."));
     log.replaceChildren(e);
-    sidebar(); head(); $("chat-text").focus();
+    sidebar(); head();
+    // Not on touch screens: focusing there scrolls the page and opens the keyboard.
+    if (!matchMedia("(pointer: coarse)").matches) $("chat-text").focus({ preventScroll: true });
   }
 
   async function open(cid) {
