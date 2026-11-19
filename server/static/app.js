@@ -127,6 +127,33 @@ document.addEventListener("submit", (e) => {
     return box;
   }
 
+  // One live status line instead of a note per stage: a Claude Code-style
+  // spinner, a random critter per stage, and a verb that changes while it works.
+  const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+  const CRITTERS = ["ʕ•ᴥ•ʔ", "(•ᴗ•)", "ᕕ( ᐛ )ᕗ", "(=^･ω･^=)", "(ﾉ◕ヮ◕)ﾉ", "┌( ಠ‿ಠ)┘", "(⌐■_■)", "(ง •̀_•́)ง", "(っ˘ڡ˘ς)", "(˘ω˘)", "ʕっ•ᴥ•ʔっ", "(ᵔᴥᵔ)"];
+  const VERBS = ["Pondering", "Tinkering", "Noodling", "Brewing", "Spelunking", "Untangling", "Wrangling", "Conjuring", "Percolating", "Clauding"];
+  const pick = (l) => l[Math.floor(Math.random() * l.length)];
+  const st = { el: null, text: "", live: false, critter: "", tick: 0 };
+  function status(text, live, working) {
+    if (!st.el) {
+      st.el = el("div", "status-line");
+      st.el.append(el("span", "spin"), el("span", "critter"), el("span", "txt"));
+      setInterval(() => {
+        if (!st.el || !st.el.isConnected) return;
+        st.tick++;
+        st.el.children[0].textContent = st.live ? SPIN[st.tick % SPIN.length] : "✻";
+        if (st.working && st.tick % 25 === 0) st.el.children[2].textContent = pick(VERBS) + "…";
+      }, 120);
+    }
+    if (text !== st.text) { st.critter = pick(CRITTERS); st.text = text; }
+    st.live = live; st.working = working;
+    st.el.classList.toggle("done", !live);
+    st.el.children[1].textContent = st.critter;
+    st.el.children[2].textContent = working ? pick(VERBS) + "…" : text;
+    st.el.hidden = !text;
+    $("chat-log").append(st.el);
+  }
+
   const project = () => S.projects.find((p) => p.project_id === S.pid);
   // The developer by name: "waseem" -> "Waseem". Server notes say "the developer".
   const dev = () => { const d = (project() || {}).developer || ""; return d ? d.charAt(0).toUpperCase() + d.slice(1) : "the developer"; };
@@ -199,6 +226,7 @@ document.addEventListener("submit", (e) => {
         who.append(e.name + (e.kind === "question" ? " asks" : ""));
         n.append(who, rich(e.agent_text), files(e.attachments));
       } else if (e.actor === "deploy") n = el("div", "note", "Deploy: " + (e.agent_text || ""));
+      else if (e.kind === "stage") { S.stageText = named(e.text); continue; }
       else n = el("div", "note", named(e.text || e.kind));
       log.append(n);
     }
@@ -209,6 +237,8 @@ document.addEventListener("submit", (e) => {
     if (!b) return;
     S.mid = b.message_id; S.cid = b.conversation_id; S.next = b.next_action || "";
     add(b.new_events); S.seq = Math.max(S.seq, b.seq || 0);
+    const asked = b.next_action === "answer_question";
+    status(asked ? "Waiting for your answer." : (S.stageText || named(b.summary)), !b.terminal && !asked, b.stage === "working");
     head(b.summary);
   }
 
@@ -224,7 +254,7 @@ document.addEventListener("submit", (e) => {
   }
 
   function fresh() {
-    S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set();
+    S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set(); S.stageText = ""; st.text = "";
     history.replaceState(null, "", location.pathname);
     const log = $("chat-log"), e = el("div", "chat-empty");
     const p = project(), big = p ? icon(p) : null;
@@ -236,7 +266,7 @@ document.addEventListener("submit", (e) => {
   }
 
   async function open(cid) {
-    S.gen++; S.seen = new Set(); S.seq = 0; $("chat-log").replaceChildren();
+    S.gen++; S.seen = new Set(); S.seq = 0; S.stageText = ""; st.text = ""; $("chat-log").replaceChildren();
     try {
       const c = await call("get_conversation", { conversation_id: cid });
       const p = S.projects.find((x) => x.name === c.project); if (p) S.pid = p.project_id;
