@@ -31,12 +31,16 @@ pub const TEST: &[&str] = &["vercel deploy", "netlify deploy"];
 /// The active Substrate deliveries for this session or folder, strictest first.
 fn active(paths: &Paths, session: &str, cwd: &str) -> Vec<Record> {
     let dir = paths.dispatch();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let mut out: Vec<Record> = std::fs::read_dir(&dir).into_iter().flatten().flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| std::fs::read(e.path()).ok())
         .filter_map(|b| serde_json::from_slice::<Record>(&b).ok())
+        // Until the agent's turn is over: the relay marks a delivery done only when Herdr
+        // shows the agent idle. A final reply does not end it; an agent can reply, then push.
+        // A delivery stuck for 12 hours (a relay that died) stops blocking.
         .filter(|r| matches!(r.state.as_str(), "submitting" | "submitted" | "working"))
-        .filter(|r| !dir.join(format!("{}.final", substrate_proto::safe_filename(&r.message_id))).exists())
+        .filter(|r| now - r.submitted_at.max(r.received_at) < 12 * 3600)
         .filter(|r| (!session.is_empty() && r.agent_session == session) || (!r.cwd.is_empty() && Path::new(cwd).starts_with(&r.cwd)))
         .collect();
     out.sort_by_key(|r| rank(&r.deploy));

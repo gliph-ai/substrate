@@ -350,6 +350,13 @@ async fn guard_blocks_deploys_the_tester_may_not_make() {
     assert!(hook("cargo test", "s1", "/elsewhere").is_ok());
     assert!(hook("git push", "other", "/w/sub").is_err(), "same project folder is covered too");
     assert!(hook("git push", "other", "/elsewhere").is_ok(), "other sessions are not affected");
+    // A final reply does not end it: the agent could reply and then push.
     std::fs::write(h.paths.dispatch().join("m1.final"), b"").unwrap();
-    assert!(hook("git push", "s1", "/w").is_ok(), "after the final reply the developer is free again");
+    assert!(hook("git push", "s1", "/w").is_err(), "still blocked after the final reply");
+    // The agent went idle in Herdr: its turn is over, the developer is free again.
+    h.herdr.set("w1:p1", "s1", "working");
+    tick(&h).await;
+    h.herdr.set("w1:p1", "s1", "idle");
+    tick(&h).await;
+    assert!(hook("git push", "s1", "/w").is_ok(), "free once the agent is idle");
 }
