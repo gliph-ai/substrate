@@ -49,6 +49,13 @@ pub struct Record {
     pub cwd: String,
     #[serde(default)]
     pub received_at: i64,
+    /// What the agent may deploy while on this message (production, test or none);
+    /// `substrate guard` enforces it. Empty, from an older server, means none.
+    #[serde(default)]
+    pub deploy: String,
+    /// The agent's session when it was handed this: the guard matches hooks to it.
+    #[serde(default)]
+    pub agent_session: String,
     #[serde(default)]
     pub submitted_at: i64,
     #[serde(default)]
@@ -184,7 +191,7 @@ impl Relay {
                 inner.bindings = projects.into_iter().map(|b| (b.project_id.clone(), b)).collect();
                 inner.state_sent.clear();
             }
-            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments } => {
+            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments, deploy } => {
                 if let Some(mut existing) = self.record(&message_id) {
                     // A repeat (the cloud re-sent after a reconnect). Never a
                     // second submission: adopt the new delivery id, re-ack.
@@ -209,6 +216,7 @@ impl Relay {
                     message_id: message_id.clone(), delivery_id, project_id: project_id.clone(), envelope, reply_token, attachments,
                     state: "received".into(), pane_id: b.as_ref().map(|b| b.pane_id.clone()).unwrap_or_default(),
                     cwd: b.as_ref().map(|b| b.cwd.clone()).unwrap_or_default(), received_at: now_s(), submitted_at: 0, saw_working: false, reported_uncertain: false,
+                    agent_session: b.as_ref().map(|b| b.agent_session.clone()).unwrap_or_default(), deploy,
                 };
                 self.save(&r);
                 self.inner.lock().unwrap().queue.entry(project_id).or_default().push_back(message_id.clone());
@@ -302,6 +310,7 @@ impl Relay {
                 r.state = "submitting".into();
                 r.pane_id = b.pane_id.clone();
                 r.cwd = b.cwd.clone();
+                r.agent_session = b.agent_session.clone();
                 self.save(&r);
                 match self.herdr.prompt(&b.pane_id, &text) {
                     Ok(()) => {

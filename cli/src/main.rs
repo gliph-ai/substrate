@@ -92,6 +92,18 @@ enum Cmd {
     },
     /// Check Herdr, the credentials, the server and the LaunchAgent.
     Doctor,
+    /// (Claude Code hook) Block push and deploy commands a tester's message does not allow.
+    /// `substrate guard install` adds the hook to ~/.claude/settings.json.
+    Guard {
+        #[command(subcommand)]
+        cmd: Option<GuardCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GuardCmd {
+    /// Add the hook to Claude Code's user settings (once; it keeps a backup).
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -210,6 +222,19 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Cmd::Guard { cmd: None } = cli.cmd {
+        // The hook: no network, no sign-in, a few files read. Exit 2 blocks the command
+        // and Claude Code shows the agent the reason.
+        let mut input = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+        let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+        let paths = Paths::new(Paths::default_root())?;
+        if let Err(why) = substrate_cli::guard::check(&paths, &v) {
+            eprintln!("{why}");
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
     let (paths, mut cfg, api) = setup()?;
     match cli.cmd {
         Cmd::Login { server, name } => {
@@ -255,6 +280,9 @@ async fn run() -> Result<()> {
                 let exe = std::env::current_exe()?.to_string_lossy().to_string();
                 launchd::install(&exe, &paths.logs().to_string_lossy(), &cfg.server)?;
                 println!("The relay runs in the background and starts at login. Run `substrate status` to check it.");
+                if substrate_cli::guard::install(&exe)? {
+                    println!("The deploy guard is on: Claude Code blocks deploys a tester's message does not allow.");
+                }
             }
             DaemonCmd::Stop => {
                 launchd::uninstall()?;
@@ -390,6 +418,12 @@ async fn run() -> Result<()> {
             std::process::Command::new("tail").args(&args).arg(&p).status()?;
         }
         Cmd::Doctor => doctor(&paths, &cfg, &api).await,
+        Cmd::Guard { cmd: Some(GuardCmd::Install) } => {
+            let exe = std::env::current_exe()?.to_string_lossy().to_string();
+            if substrate_cli::guard::install(&exe)? { println!("The deploy guard is on for Claude Code (~/.claude/settings.json; the old file is settings.json.before-substrate)."); }
+            else { println!("The deploy guard is already on."); }
+        }
+        Cmd::Guard { cmd: None } => unreachable!("handled before sign-in"),
     }
     Ok(())
 }
@@ -444,6 +478,7 @@ async fn doctor(paths: &Paths, cfg: &Config, api: &Api) {
     println!("{} credentials: {}", ok(creds.is_some()), if creds.is_some() { api.store().backend().to_string() } else { "not signed in (substrate login)".into() });
     let reach = api.http.get(format!("{}/healthz", cfg.server)).send().await.map(|r| r.status().is_success()).unwrap_or(false);
     println!("{} server: {}", ok(reach), cfg.server);
+    println!("{} deploy guard: {}", ok(substrate_cli::guard::installed()), if substrate_cli::guard::installed() { "on in Claude Code" } else { "off (substrate guard install)" });
     if creds.is_some() {
         let me = api.call("GET", "/relay/api/whoami", None).await;
         println!("{} account: {}", ok(me.is_ok()), match &me { Ok(v) => format!("{} on {}", v["account"].as_str().unwrap_or(""), v["machine"].as_str().unwrap_or("")), Err(e) => e.to_string() });

@@ -84,6 +84,10 @@ pub enum CloudFrame {
         envelope: String,
         reply_token: String,
         attachments: Vec<AttachmentRef>,
+        /// What the agent may deploy while it works on this: production, test or none.
+        /// The relay's guard (`substrate guard`) blocks the rest. Missing means none.
+        #[serde(default)]
+        deploy: String,
     },
     Cancel { delivery_id: String },
     Error { message: String },

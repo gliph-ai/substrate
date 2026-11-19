@@ -64,6 +64,7 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub deploy_allow: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -307,14 +308,25 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
         .bind(&p.id).bind(m.sender_id).fetch_optional(&app.db).await?.unwrap_or(false);
     let auto = role == "owner" || p.auto_active() || trusted;
     let stage = if !flags.is_empty() { "held" } else if auto { "approved" } else { "pending_approval" };
+    // What the agent may deploy while it works on this; the relay's guard enforces it.
+    // Checked above against the sender's permissions. An answer keeps its message's.
+    let deploy: String = match m.deploy {
+        Some(d) => d.to_string(),
+        None => match m.conversation_id {
+            Some(c) if m.kind == "answer" => sqlx::query_scalar("SELECT deploy_allow FROM messages WHERE conversation_id=$1 ORDER BY order_n DESC LIMIT 1")
+                .bind(c).fetch_optional(&app.db).await?.unwrap_or_else(|| "none".into()),
+            _ if role == "owner" => "production".into(),
+            _ => "none".into(),
+        },
+    };
 
     let inserted = sqlx::query_as::<_, Message>(
-        "INSERT INTO messages (id, conversation_id, project_id, sender_id, sender_label, client_name, kind, text, envelope, idem_key, stage, risk, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        "INSERT INTO messages (id, conversation_id, project_id, sender_id, sender_label, client_name, kind, text, envelope, idem_key, stage, risk, expires_at, deploy_allow)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT (sender_id, idem_key) WHERE idem_key <> '' DO NOTHING RETURNING *",
     )
     .bind(&mid).bind(&conv).bind(&p.id).bind(m.sender_id).bind(&label).bind(m.client_name).bind(m.kind).bind(&text)
-    .bind(&envelope).bind(m.idem_key).bind(stage).bind(flags.join(",")).bind(now() + Duration::days(MESSAGE_TTL_DAYS))
+    .bind(&envelope).bind(m.idem_key).bind(stage).bind(flags.join(",")).bind(now() + Duration::days(MESSAGE_TTL_DAYS)).bind(&deploy)
     .fetch_optional(&app.db).await?;
     let Some(_inserted) = inserted else {
         // A concurrent call with the same idempotency key won the race.
@@ -420,7 +432,7 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     }).collect();
     let sent = app.send_machine(&p.machine_id, CloudFrame::Deliver {
         delivery_id: delivery.clone(), message_id: m.id.clone(), project_id: pid.to_string(),
-        envelope: m.envelope.clone(), reply_token, attachments,
+        envelope: m.envelope.clone(), reply_token, attachments, deploy: m.deploy_allow.clone(),
     });
     if !sent {
         // The socket closed between the check and the send: back to the queue.

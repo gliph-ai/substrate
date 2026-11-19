@@ -689,6 +689,8 @@ async fn access_link_scopes_projects_and_permissions() {
     let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
     let env = domain::message(&t.app, &mid).await.unwrap().envelope;
     assert!(env.contains("Deploy to test") && env.contains("Never deploy it to production"), "{env}");
+    // The relay's guard gets the allowance from the server, not from the prompt.
+    assert_eq!(domain::message(&t.app, &mid).await.unwrap().deploy_allow, "test");
 
     // The producer sees the link's use; revoking it stops it at once.
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();

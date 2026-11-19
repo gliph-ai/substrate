@@ -93,7 +93,11 @@ fn bind(h: &H, projects: &[(&str, &str, &str)]) {
 }
 
 fn deliver(h: &H, mid: &str, pid: &str, env: &str, atts: Vec<AttachmentRef>) {
-    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: env.into(), reply_token: "rt".into(), attachments: atts });
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: env.into(), reply_token: "rt".into(), attachments: atts, deploy: "none".into() });
+}
+
+fn deliver_allowing(h: &H, mid: &str, pid: &str, allow: &str) {
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: "fix it".into(), reply_token: "rt".into(), attachments: vec![], deploy: allow.into() });
 }
 
 async fn tick(h: &H) {
@@ -222,7 +226,7 @@ async fn duplicate_delivery_is_typed_once() {
     deliver(&h, "m1", "p1", "hi", vec![]);
     tick(&h).await;
     // The cloud re-sends after a reconnect, with a new delivery id.
-    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_new".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt2".into(), attachments: vec![] });
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_new".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt2".into(), attachments: vec![], deploy: "none".into() });
     tick(&h).await;
     assert_eq!(h.herdr.prompts().len(), 1);
     assert_eq!(acks(&drain(&mut h), "d_new"), vec![AckStage::Submitted]);
@@ -295,7 +299,7 @@ async fn reconnect_over_a_real_socket() {
             let welcome = CloudFrame::Welcome { machine_id: "mc".into(), projects: vec![Binding { project_id: "p1".into(), handle: "p1".into(), pane_id: "w1:p1".into(), agent_session: "s1".into(), cwd: "/w".into(), has_icon: true }] };
             ws.send(serde_json::to_string(&welcome).unwrap().into()).await.unwrap();
             if round == 0 {
-                let d = CloudFrame::Deliver { delivery_id: "d1".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt".into(), attachments: vec![] };
+                let d = CloudFrame::Deliver { delivery_id: "d1".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt".into(), attachments: vec![], deploy: "none".into() };
                 ws.send(serde_json::to_string(&d).unwrap().into()).await.unwrap();
             }
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(2500);
@@ -327,4 +331,25 @@ fn herdr_refusals_are_not_uncertain() {
     assert!(matches!(classify(r#"{"error":{"code":"agent_not_ready","message":"agent w1:p1 is no longer the pane foreground process"}}"#), Err(PromptError::NotReady)));
     assert!(matches!(classify(r#"{"error":{"code":"agent_not_found","message":"x"}}"#), Err(PromptError::Gone)));
     assert!(matches!(classify("socket closed"), Err(PromptError::Other(_))));
+}
+
+/// The guard reads the relay's own records: while a tester's message is with the
+/// agent, a deploy it does not allow is blocked; after the reply, nothing is.
+#[tokio::test]
+async fn guard_blocks_deploys_the_tester_may_not_make() {
+    let mut h = harness();
+    h.herdr.set("w1:p1", "s1", "idle");
+    bind(&h, &[("p1", "w1:p1", "s1")]);
+    deliver_allowing(&h, "m1", "p1", "test");
+    tick(&h).await;
+    drain(&mut h);
+    let hook = |cmd: &str, session: &str, cwd: &str| substrate_cli::guard::check(&h.paths, &serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": session, "cwd": cwd}));
+    assert!(hook("git push origin HEAD:main", "s1", "/elsewhere").is_err(), "production deploy blocked");
+    assert!(hook("git push origin staging", "s1", "/elsewhere").is_ok(), "test deploy allowed");
+    assert!(hook("cargo test", "s1", "/elsewhere").is_ok());
+    assert!(hook("git push", "other", "/w/sub").is_err(), "same project folder is covered too");
+    assert!(hook("git push", "other", "/elsewhere").is_ok(), "other sessions are not affected");
+    std::fs::write(h.paths.dispatch().join("m1.final"), b"").unwrap();
+    assert!(hook("git push", "s1", "/w").is_ok(), "after the final reply the developer is free again");
 }

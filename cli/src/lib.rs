@@ -4,6 +4,7 @@ pub mod api;
 pub mod config;
 pub mod daemon;
 pub mod deploy;
+pub mod guard;
 pub mod herdr;
 pub mod icon;
 pub mod launchd;
