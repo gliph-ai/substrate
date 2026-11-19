@@ -1678,7 +1678,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                         div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
                         form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
                     }
-                    span.muted style="font-size:13px" { @if app.machine_online(mid) { "Online now." } @else if let Some(s) = seen { "Last seen " (ago(s)) " ago." } @else { "Never connected." } }
+                    @if !app.machine_online(mid) { span.muted style="font-size:13px" { @if let Some(s) = seen { "Last seen " (ago_text(s)) "." } @else { "Never connected." } } }
                     @for (space, list) in spaces(panes) {
                         div.list style="padding:0;background:transparent" {
                             div.label { (space) }

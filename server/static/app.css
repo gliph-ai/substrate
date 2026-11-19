@@ -350,3 +350,8 @@ a.me { text-decoration: none; gap: 8px; }
 .av-badge { position: absolute; right: -4px; bottom: -4px; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); }
 .av-badge img { width: 12px; height: 12px; }
 .av-badge:empty { display: none; }
+
+.link-row { text-decoration: none; color: inherit; }
+.link-row .chev { color: var(--faint); display: inline-grid; transition: transform .15s, color .15s; }
+.link-row .chev svg { width: 16px; height: 16px; }
+.link-row:hover .chev { color: var(--text); transform: translateX(2px); }

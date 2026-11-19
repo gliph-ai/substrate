@@ -133,6 +133,7 @@ pub async fn revoke(app: &AppInner, owner: &str, lid: &str) -> Result<(), Fail> 
 
 #[derive(sqlx::FromRow)]
 struct LinkRow {
+    account_id: String,
     waiting: i64,
     deploy_test: bool,
     deploy_prod: bool,
@@ -149,7 +150,7 @@ struct LinkRow {
 
 pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let links = sqlx::query_as::<_, LinkRow>(
-        "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
+        "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
                 (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
                 COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
@@ -166,27 +167,29 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
             } @else {
                 div.list {
                     @for l in &links {
-                        div.item {
-                            span.l.stack style="gap:4px;align-items:flex-start" {
-                                span.row { a href=(format!("/links/{}", l.id)) style="text-decoration:none" { strong style="font-weight:500" { (l.label) } } @if l.waiting > 0 { a.tag.warn href=(format!("/links/{}#waiting", l.id)) style="text-decoration:none" { (l.waiting) " waiting for you" } } }
-                                span.muted style="font-size:13px" { (l.projects.join(", ")) }
-                                span.row style="gap:6px" {
-                                    @if l.can_read { span.tag { "replies" } }
-                                    @if l.can_deploys { span.tag { "deploys" } }
-                                    @if l.can_files { span.tag { "files" } }
-                                    @if l.deploy_test { span.tag.blue { "deploys to test" } }
-                                    @if l.deploy_prod { span.tag.warn { "deploys to production" } }
-                                    @if l.auto { span.tag.warn { "no approval" } }
+                        // The whole row opens the link's page: history, approvals, Revoke.
+                        a.item.link-row href=(format!("/links/{}", l.id)) {
+                            span.l.row style="align-items:flex-start;gap:12px" {
+                                img.avatar-img src=(format!("/accounts/{}/avatar", l.account_id)) alt="" style="width:32px;height:32px";
+                                span.stack style="gap:4px;align-items:flex-start" {
+                                    span.row { strong style="font-weight:500" { (l.label) } @if l.waiting > 0 { span.tag.warn { (l.waiting) " waiting for you" } } }
+                                    span.muted style="font-size:13px" { (l.projects.join(", ")) }
+                                    span.row style="gap:6px;flex-wrap:wrap" {
+                                        @if l.can_read { span.tag { "replies" } }
+                                        @if l.can_deploys { span.tag { "deploys" } }
+                                        @if l.can_files { span.tag { "files" } }
+                                        @if l.deploy_test { span.tag.blue { "deploys to test" } }
+                                        @if l.deploy_prod { span.tag.warn { "deploys to production" } }
+                                        @if l.auto { span.tag.warn { "no approval" } }
+                                    }
                                 }
                             }
                             span.r.row {
                                 span.faint style="font-size:13px" {
-                                    @match l.last_used_at { Some(t) => { "used " (crate::web::ago(&t)) }, None => { "not used yet" } }
+                                    @match l.last_used_at { Some(t) => { "used " (crate::web::ago_text(&t)) }, None => { "not used yet" } }
                                     " · expires " (l.expires_at.format("%b %d"))
                                 }
-                                form.inline method="post" action=(format!("/links/{}/revoke", l.id)) data-confirm="Revoke this link? It stops working at once." {
-                                    (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" }
-                                }
+                                span.chev { (ic("arrow-right")) }
                             }
                         }
                     }
@@ -237,7 +240,7 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
 /// approval, and everything its holder sent and got back.
 pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<String>) -> Result<Response, Fail> {
     let l = sqlx::query_as::<_, LinkRow>(
-        "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
+        "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
                 (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
                 COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
