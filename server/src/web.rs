@@ -331,7 +331,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                     }
                     main { (body) }
                     footer.foot {
-                        span { "Substrate is part of " a href="https://gliph.sh" { "gliph.sh" } }
+                        span.row style="gap:6px" { "Substrate is part of " a.row href="https://gliph.sh" style="gap:6px" { "gliph.sh" (gliph_mark(16)) } }
                         span id="security" { "Your agent keeps its own permissions when you approve a message." }
                     }
                 }

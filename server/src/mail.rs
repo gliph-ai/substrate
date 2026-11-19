@@ -60,6 +60,7 @@ impl Message<'_> {
                         table role="presentation" width="100%" cellpadding="0" cellspacing="0" style=(format!("max-width:480px;{font}")) {
                             tr { td align="center" style="padding:20px 0;font-size:12px;color:#A1A1AA" {
                                 "Substrate is part of " a href="https://gliph.sh" style="color:#A1A1AA" { "gliph.sh" }
+                                " " img src=(format!("{base}/static/logos/gliph.png")) alt="" width="14" height="14" style="vertical-align:-2px;border-radius:3px";
                             } }
                         }
                     } } }
