@@ -213,7 +213,7 @@ fn agent_available(app: &AppInner, p: &Project) -> bool {
 }
 
 fn project_json(app: &AppInner, p: &Project, role: &str, owner: &str, targets: &[&str]) -> Value {
-    json!({"deploy_targets": targets,"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
+    json!({"deploy_targets": targets, "developer_avatar": format!("{}/accounts/{}/avatar", app.cfg.public_url, p.owner_id),"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
         "icon_url": if p.icon_etag.is_empty() { Value::Null } else { json!(format!("{}/projects/{}/icon?v={}", app.cfg.public_url, p.id, p.icon_etag)) },
         "agent": agent_label(&p.agent), "agent_online": agent_available(app, p),
         "agent_state": p.state, "your_role": role,

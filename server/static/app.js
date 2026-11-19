@@ -258,6 +258,17 @@ document.addEventListener("submit", (e) => {
     if (p.agent_state === "blocked") return el("span", "tag warn", "busy");
     return el("span", "tag ok", "free");
   }
+  // The agent's own logo is its status: it moves while working, glows when it needs
+  // someone, and greys out when offline.
+  function agentMark(p) {
+    const state = !available(p) ? "offline" : p.agent_state === "working" ? "working" : p.agent_state === "blocked" ? "blocked" : "free";
+    const lg = agentLogo(p.agent);
+    if (!lg) return pill(p);
+    const m = el("span", "agent-mark " + state + (String(p.agent || "").toLowerCase().includes("claude") ? " claude" : ""));
+    m.title = (p.agent || "Agent") + ": " + { offline: "offline", working: "working", blocked: "needs someone at the computer", free: "free" }[state];
+    lg.width = lg.height = 18; m.append(lg);
+    return m;
+  }
   function icon(p) {
     if (p.icon_url) { const i = el("img", "picon"); i.src = p.icon_url; i.alt = ""; i.width = i.height = 22; return i; }
     const t = el("span", "picon tile", (p.name || "?").charAt(0).toUpperCase()); t.style.cssText = "width:22px;height:22px;font-size:10px"; return t;
@@ -268,7 +279,7 @@ document.addEventListener("submit", (e) => {
     for (const p of S.projects) {
       const b = el("button", "chat-item" + (p.project_id === S.pid ? " on" : ""));
       b.type = "button";
-      b.append(icon(p), el("span", "grow", p.name), pill(p));
+      b.append(icon(p), el("span", "grow", p.name), agentMark(p));
       b.onclick = () => { S.pid = p.project_id; fresh(); };
       box.append(b);
     }
@@ -288,9 +299,11 @@ document.addEventListener("submit", (e) => {
   function head(summary) {
     const p = project(), h = $("chat-head"); h.replaceChildren();
     if (!p) return;
-    const t = el("div", "row"); t.append(icon(p), el("strong", null, p.name));
-    const lg = agentLogo(p.agent); if (lg) t.append(lg);
-    t.append(el("span", "faint", (p.agent || "agent") + " · " + dev()), pill(p));
+    // project › person › agent
+    const t = el("div", "row"); t.append(icon(p), el("strong", null, p.name), el("span", "crumb-sep", "›"));
+    if (p.developer_avatar) { const av = el("img", "avatar-img"); av.src = p.developer_avatar; av.alt = ""; t.append(av); }
+    t.append(el("span", "faint", dev()), el("span", "crumb-sep", "›"), agentMark(p), el("span", "faint", p.agent || "agent"));
+    if (!available(p)) t.append(el("span", "tag off", "offline"));
     h.append(t);
     if (summary) h.append(el("div", "muted chat-sum", named(summary)));
     const btn = $("chat-send").querySelector("span");

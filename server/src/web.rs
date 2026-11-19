@@ -304,7 +304,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                         }
                         div.row {
                             @if let Some(a) = acct {
-                                span.muted style="font-size:14px" { (a.label()) }
+                                a.row.me href="/profile" title="Profile" { img.avatar-img src=(format!("/accounts/{}/avatar", a.id)) alt="" width="24" height="24"; span.muted style="font-size:14px" { (a.label()) } }
                                 form.inline method="post" action="/logout" { button.btn.small.tertiary type="submit" { (ic("log-out")) "Sign out" } }
                             } @else {
                                 a.btn.primary.small href="/login" { (ic("terminal")) "Console" }
@@ -1363,6 +1363,70 @@ pub async fn upload_post(State(app): State<App>, Path(t): Path<String>, mut mp: 
         }
     }
     Ok(Redirect::to(&format!("/upload/{t}")).into_response())
+}
+
+// ---- profile ----
+
+/// GET /accounts/{id}/avatar: the uploaded picture, or a lettered circle.
+pub async fn avatar(State(app): State<App>, Path(aid): Path<String>) -> Result<Response, Fail> {
+    let row: Option<(Option<Vec<u8>>, String, String, String)> = sqlx::query_as("SELECT avatar, avatar_mime, name, email FROM accounts WHERE id=$1")
+        .bind(&aid).fetch_optional(&app.db).await?;
+    let Some((bytes, mime, name, email)) = row else { return Err(Fail::new(404, "no such account")) };
+    let cache = (header::CACHE_CONTROL, "public, max-age=300".to_string());
+    if let (Some(b), false) = (bytes, mime.is_empty()) {
+        return Ok(([(header::CONTENT_TYPE, mime), cache], b).into_response());
+    }
+    let who = if name.is_empty() { email } else { name };
+    let letter: String = who.chars().next().unwrap_or('?').to_uppercase().collect();
+    let svg = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#2A2F55"/><text x="32" y="41" text-anchor="middle" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#F5F5F7">{}</text></svg>"##,
+        maud::html! { (letter) }.into_string());
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml".to_string()), cache], svg).into_response())
+}
+
+pub async fn profile(State(app): State<App>, User(a): User, Query(f): Query<FlashQ>) -> Result<Response, Fail> {
+    let _ = &app;
+    Ok(Html(layout("Profile", Some(&a), None, html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
+            h1 { "Profile" }
+            form.card.stack method="post" action="/profile" enctype="multipart/form-data" {
+                (csrf(&a))
+                div.row style="gap:16px" {
+                    img.avatar-img src=(format!("/accounts/{}/avatar?t={}", a.id, crate::app::now().timestamp())) alt="" width="64" height="64" style="width:64px;height:64px";
+                    div.field style="flex:1" { label for="av" { "Picture" } input id="av" type="file" name="avatar" accept="image/png,image/jpeg,image/webp"; span.faint style="font-size:12px" { "PNG, JPEG or WebP, 1 MB at most. Testers see it next to your name." } }
+                }
+                div.field { label for="nm" { "Name" } input id="nm" type="text" name="name" value=(a.name) maxlength="64" placeholder=(a.label()); }
+                div.row { button.btn.primary type="submit" { (ic("check")) "Save" } }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+pub async fn profile_post(State(app): State<App>, headers: HeaderMap, User(a): User, mut mp: Multipart) -> Result<Response, Fail> {
+    let (mut token, mut name, mut pic): (String, Option<String>, Option<Vec<u8>>) = (String::new(), None, None);
+    while let Some(field) = mp.next_field().await.map_err(|_| Fail::new(400, "bad form"))? {
+        match field.name().unwrap_or("") {
+            "csrf" => token = field.text().await.unwrap_or_default(),
+            "name" => name = Some(field.text().await.unwrap_or_default()),
+            "avatar" => { let b = field.bytes().await.map_err(|_| Fail::new(413, "picture too large"))?; if !b.is_empty() { pic = Some(b.to_vec()); } }
+            _ => {}
+        }
+    }
+    check_csrf(&app, &headers, &a, &token)?;
+    if let Some(n) = name {
+        sqlx::query("UPDATE accounts SET name=$2 WHERE id=$1").bind(&a.id).bind(substrate_proto::sanitize(n.trim(), 64)).execute(&app.db).await?;
+    }
+    if let Some(b) = pic {
+        if b.len() > 1024 * 1024 {
+            return Ok(Redirect::to("/profile?flash=The+picture+is+over+1+MB.").into_response());
+        }
+        let Some(mime) = crate::files::sniff(&b, "").filter(|m| m.starts_with("image/")) else {
+            return Ok(Redirect::to("/profile?flash=Use+a+PNG,+JPEG+or+WebP+picture.").into_response());
+        };
+        let etag = hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(&b)[..6]);
+        sqlx::query("UPDATE accounts SET avatar=$2, avatar_mime=$3, avatar_etag=$4 WHERE id=$1").bind(&a.id).bind(&b).bind(mime).bind(etag).execute(&app.db).await?;
+    }
+    Ok(Redirect::to("/profile?flash=Saved.").into_response())
 }
 
 // ---- invitations ----

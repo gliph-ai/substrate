@@ -211,6 +211,11 @@ async fn full_loop_approval_delivery_reply_deploy() {
     let got = t.http.get(f["url"].as_str().unwrap()).send().await.unwrap();
     assert_eq!(got.status(), 200);
 
+    // The developer's avatar: a lettered circle until they upload one.
+    let r = t.http.get(format!("{}/accounts/{}/avatar", t.base, w.dev.account)).send().await.unwrap();
+    assert_eq!(r.headers()["content-type"], "image/svg+xml");
+    assert!(s["agent_online"].is_boolean());
+
     // It waits on the developer's Approvals page, with Approve and the prompt.
     let page = t.http.get(format!("{}/approvals", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
     assert!(page.contains("doesn&#39;t save my preferences") || page.contains("doesn't save my preferences"), "pending message listed");

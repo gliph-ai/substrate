@@ -307,3 +307,17 @@ table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last
   .chat-compose { width: calc(100% - 32px); }
   .msg { max-width: 90%; }
 }
+
+/* Avatars and the agent mark: the agent's own logo moves while it works. */
+.avatar-img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; background: var(--card-2); }
+a.me { text-decoration: none; gap: 8px; }
+.agent-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; }
+.agent-mark img { width: 18px; height: 18px; display: block; }
+.agent-mark.working.claude img { animation: claude-spin 1.6s cubic-bezier(.5,.1,.5,.9) infinite; }
+.agent-mark.working:not(.claude) img { animation: agent-breathe 1.2s ease-in-out infinite; }
+.agent-mark.blocked img { animation: agent-breathe .8s ease-in-out infinite; filter: drop-shadow(0 0 4px var(--amber)); }
+.agent-mark.offline img { filter: grayscale(1); opacity: .45; }
+@keyframes claude-spin { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(.82); } 100% { transform: rotate(360deg) scale(1); } }
+@keyframes agent-breathe { 50% { transform: scale(.8); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .agent-mark img { animation: none !important; } }
+.crumb-sep { color: var(--faint); }

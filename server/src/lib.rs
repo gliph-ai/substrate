@@ -133,6 +133,8 @@ pub fn router(app: App) -> Router {
         .route("/mcp/{secret}/live", get(chat::link_live))
         .route("/live", get(web::live))
         .route("/approvals", get(web::approvals))
+        .route("/profile", get(web::profile).post(web::profile_post))
+        .route("/accounts/{aid}/avatar", get(web::avatar))
         .route("/approvals/{mid}/{action}", post(web::approval_action))
         .route("/chat/rpc", post(chat::rpc))
         .route("/sing", post(sing::sing))
