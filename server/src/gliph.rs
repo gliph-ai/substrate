@@ -170,7 +170,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
             let p = resolve(app, &account, Some(&h), channel).await?;
             let m = domain::create_message(app, NewMessage {
                 project_id: &p.id, sender_id: &account, sender_label: "", client_name: "Gliph", conversation_id: None,
-                kind: "task", text: &rest, idem_key: "", attachment_ids: &[],
+                kind: "task", text: &rest, idem_key: "", attachment_ids: &[], deploy: None,
             }).await.map_err(fail)?;
             Ok(format!("Sent to {} ({}, {}).", p.name, m.id, m.stage.replace('_', " ")))
         }
@@ -217,7 +217,7 @@ async fn on_event(app: &App, e: &Value) -> anyhow::Result<()> {
     let own = account_for_nick(app, actor).await.as_deref() == Some(p.owner_id.as_str());
     let sender = p.owner_id.clone();
     let res = if own {
-        domain::create_message(app, NewMessage { project_id: &p.id, sender_id: &sender, sender_label: "", client_name: "Gliph", conversation_id: None, kind: "task", text, idem_key: "", attachment_ids: &[] }).await
+        domain::create_message(app, NewMessage { project_id: &p.id, sender_id: &sender, sender_label: "", client_name: "Gliph", conversation_id: None, kind: "task", text, idem_key: "", attachment_ids: &[], deploy: None }).await
     } else {
         guest_message(app, &p, &label, text).await
     };
@@ -232,7 +232,7 @@ async fn on_event(app: &App, e: &Value) -> anyhow::Result<()> {
 async fn guest_message(app: &App, p: &Project, label: &str, text: &str) -> Result<domain::Message, crate::app::Fail> {
     let m = domain::create_message(app, NewMessage {
         project_id: &p.id, sender_id: &p.owner_id, sender_label: label, client_name: "Gliph channel",
-        conversation_id: None, kind: "task", text, idem_key: "", attachment_ids: &[],
+        conversation_id: None, kind: "task", text, idem_key: "", attachment_ids: &[], deploy: None,
     }).await?;
     // create_message auto-approves the owner's own messages; a guest's is not
     // the owner's, so put it back in front of the developer unless auto relay is on.

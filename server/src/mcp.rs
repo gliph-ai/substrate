@@ -57,6 +57,7 @@ fn all_tools() -> Value {
             "project_id": pid,
             "text": {"type": "string", "description": "The message, in the user's words. Plain text, up to 8000 characters."},
             "conversation_id": {"type": "string", "description": "Continue an existing conversation instead of starting a new one."},
+            "deploy": {"type": "boolean", "description": "true: the agent deploys the change the project's usual way when done. false: the agent does not deploy until asked. Leave it out to say neither."},
             "send_anyway": {"type": "boolean", "description": "Send while the agent is offline. Set it only after the user agrees to wait."},
             "kind": {"type": "string", "enum": ["feedback", "question", "task"], "description": "feedback for bugs and impressions, question for questions, task for a requested change."},
             "attachments": {"type": "array", "maxItems": 5, "items": {"type": "object", "properties": {
@@ -280,7 +281,7 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             let m = domain::create_message(app, NewMessage {
                 project_id: &p.id, sender_id: account, sender_label: "", client_name: client,
                 conversation_id: a.get("conversation_id").and_then(|v| v.as_str()), kind, text: s(a, "text"),
-                idem_key: &idem, attachment_ids: &ids,
+                idem_key: &idem, attachment_ids: &ids, deploy: a.get("deploy").and_then(|v| v.as_bool()),
             }).await?;
             domain::status_block(app, &m, 0, true).await
         }
@@ -308,7 +309,7 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             domain::set_stage(app, &m.id, "answered").await?;
             let answer = domain::create_message(app, NewMessage {
                 project_id: &m.project_id, sender_id: account, sender_label: "", client_name: client,
-                conversation_id: Some(&m.conversation_id), kind: "answer", text: s(a, "text"), idem_key: "", attachment_ids: &[],
+                conversation_id: Some(&m.conversation_id), kind: "answer", text: s(a, "text"), idem_key: "", attachment_ids: &[], deploy: None,
             }).await?;
             domain::status_block(app, &answer, 0, true).await
         }

@@ -1166,7 +1166,7 @@ pub async fn answer(State(app): State<App>, headers: HeaderMap, User(a): User, P
     domain::set_stage(&app, &m.id, "answered").await?;
     domain::create_message(&app, domain::NewMessage {
         project_id: &m.project_id, sender_id: &a.id, sender_label: "", client_name: "Substrate web", conversation_id: Some(&cid),
-        kind: "answer", text: &f.text, idem_key: "", attachment_ids: &[],
+        kind: "answer", text: &f.text, idem_key: "", attachment_ids: &[], deploy: None,
     }).await?;
     Ok(Redirect::to(&format!("/conversations/{cid}")).into_response())
 }

@@ -216,6 +216,8 @@ pub struct NewMessage<'a> {
     pub idem_key: &'a str,
     /// Already-validated attachment ids (uploaded by this sender, unattached).
     pub attachment_ids: &'a [String],
+    /// The chat's Auto deploy switch (see substrate_proto::EnvelopeInput::deploy).
+    pub deploy: Option<bool>,
 }
 
 pub const MESSAGE_TTL_DAYS: i64 = 7;
@@ -280,7 +282,7 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     }
     let envelope = proto::envelope(&proto::EnvelopeInput {
         message_id: &mid, project_handle: &p.handle, project_path: &p.cwd, sender: &label,
-        client: m.client_name, text: &text, attachments: &names, nonce: &crate::app::token_n(12),
+        client: m.client_name, text: &text, attachments: &names, nonce: &crate::app::token_n(12), deploy: m.deploy,
     });
 
     let flags = safety::risk_flags(&text);

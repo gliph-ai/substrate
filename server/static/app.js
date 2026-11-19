@@ -341,6 +341,11 @@ document.addEventListener("submit", (e) => {
     new EventSource(live).onmessage = () => reload().catch(() => {});
   }
 
+  // Auto deploy: remembered per browser; it changes the instruction in each message.
+  const dep = $("chat-deploy");
+  try { dep.checked = localStorage.getItem("substrate.autodeploy") === "1"; } catch (e) {}
+  dep.onchange = () => { try { localStorage.setItem("substrate.autodeploy", dep.checked ? "1" : "0"); } catch (e) {} };
+
   $("chat-new").onclick = fresh;
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });
@@ -352,7 +357,7 @@ document.addEventListener("submit", (e) => {
     try {
       const b = S.next === "answer_question"
         ? await call("reply", { message_id: S.mid, text })
-        : await call("send_message", { project_id: S.pid, text: text || "(files attached)", conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID(),
+        : await call("send_message", { project_id: S.pid, text: text || "(files attached)", conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID(), deploy: $("chat-deploy").checked,
             attachments: pending.length ? await Promise.all(pending.map(async (f) => ({ name: f.name, data_base64: await b64(f) }))) : undefined });
       ta.value = ""; ta.style.height = "auto"; pending.length = 0; chips();
       block(b); watch(); reload();
