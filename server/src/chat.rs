@@ -43,7 +43,7 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                         div.chat-log #chat-log {
                             div.chat-empty { (orb("xl")) h2 { "Talk to the developer's agent." } p.muted { "Report a bug, ask a question or request a change. The developer sees every message." } }
                         }
-                        div.chat-banner #chat-banner hidden {}
+                        div.chat-banner.notice.warn #chat-banner hidden { span.ni { (ic("alert")) } div.nb #chat-banner-text {} }
                         div.chat-files #chat-files hidden {}
                         form.chat-compose #chat-form {
                             input #chat-file type="file" multiple hidden accept="image/png,image/jpeg,image/webp,application/pdf,text/plain";

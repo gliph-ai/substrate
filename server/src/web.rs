@@ -104,6 +104,7 @@ pub(crate) fn ic(name: &str) -> Markup {
         "monitor-off" => r#"<path d="M17 17H4a2 2 0 0 1-2-2V5c0-1.5 1-2 1-2"/><path d="M22 15V5a2 2 0 0 0-2-2H9"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m2 2 20 20"/>"#,
         "square-pen" => r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>"#,
         "paperclip" => r#"<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>"#,
+        "alert" => r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -186,6 +187,12 @@ fn state_dot(state: &str) -> &'static str {
         "offline" | "unbound" => "",
         _ => "",
     }
+}
+
+/// A notice: a solid card with a coloured icon chip. kind: ok, warn or bad.
+pub(crate) fn notice(kind: &str, body: Markup) -> Markup {
+    let icon = match kind { "ok" => "check", "bad" => "x", _ => "alert" };
+    html! { div class=(format!("notice {kind}")) role=(if kind == "ok" { "status" } else { "alert" }) { span.ni { (ic(icon)) } div.nb { (body) } } }
 }
 
 /// Stages of a message that still waits to reach an agent.
@@ -421,7 +428,7 @@ pub fn login_page(_app: &AppInner, next: &str, err: Option<&str>) -> Html<String
             div style="display:flex;justify-content:center;padding:12px 0 24px" { (orb("xl")) }
             h1 style="text-align:center;margin-bottom:16px" { "Sign in to " span.grad { "Substrate" } }
             div.card {
-                @if let Some(e) = err { div.flash.bad role="alert" { (e) } }
+                @if let Some(e) = err { (notice("bad", html! { (e) })) }
                 form method="post" action="/login" class="stack" {
                     input type="hidden" name="next" value=(next);
                     div.field { label for="email" { "Email" } input id="email" type="email" name="email" required autocomplete="email" placeholder="you@company.com"; }
@@ -502,7 +509,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
             }
             @if !gone.is_empty() {
                 div.card.attention {
-                    div.row style="font-size:19px;font-weight:500" { "Agents gone" }
+                    div.row style="font-size:19px;font-weight:500" { span.ni { (ic("alert")) } "Agents gone" }
                     div.list style="padding:0;background:transparent" {
                         @for (p, q) in &gone {
                             a.item href=(format!("/projects/{}", p.id)) {
@@ -617,7 +624,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
 
     Ok(Html(layout(&p.name, Some(&a), Some(format!("/projects/{pid}/live")), html! {
         div.stack style="padding:12px 0 48px" {
-            @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
+            @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
             @if let Some(secret) = &f.invite {
                 div.card.glow {
                     h3 { "Invitation link" }
@@ -645,8 +652,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
             }
             @if owner && agent_gone(&p.state) {
                 div.card.attention {
-                    h3 { @match p.state.as_str() { "offline" => "The computer is offline", "unbound" => "No pane", _ => "The agent's session ended" } }
-                    p style="color:#E4D9C4;margin:0" {
+                    h3.row { span.ni { (ic("alert")) } @match p.state.as_str() { "offline" => "The computer is offline", "unbound" => "No pane", _ => "The agent's session ended" } }
+                    p.muted style="margin:0" {
                         @if queued > 0 { (queued) @if queued == 1 { " message waits" } @else { " messages wait" } " for an agent. " }
                         "Testers see the agent as offline. Move the project to a running agent:"
                     }
@@ -676,8 +683,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                         @if p.auto_active() {
                             section.card.attention {
                                 div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
-                                div style="font-size:26px;font-weight:500;letter-spacing:-.02em" { "Auto relay is on" }
-                                p style="color:#E4D9C4;margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
+                                div.row style="font-size:26px;font-weight:500;letter-spacing:-.02em" { span.ni { (ic("zap")) } "Auto relay is on" }
+                                p.muted style="margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
                                 form method="post" action=(format!("/projects/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { (ic("pause")) "Turn off auto relay" } }
                             }
                         } @else {
@@ -1351,7 +1358,7 @@ pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<Flas
         .bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Connect an assistant", Some(&a), None, html! {
         div.narrow.stack style="padding:16px 0 48px" {
-            @if let Some(msg) = &f.flash { div.flash role="status" { (msg) } }
+            @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
             h1 { "Connect your " span.grad { "assistant" } }
             p.lead { "Add Substrate once. Then tell your assistant what you found." }
             (assistant_steps(&app))

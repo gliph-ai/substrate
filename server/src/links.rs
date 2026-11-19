@@ -153,7 +153,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
     ).bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Access links", Some(&a), None, html! {
         div.narrow.stack style="padding:16px 0 48px" {
-            @if let Some(msg) = q.get("flash") { div.flash role="status" { (msg) } }
+            @if let Some(msg) = q.get("flash") { (crate::web::notice("ok", html! { (msg) })) }
             div.between { h1 { "Access " span.grad { "links" } } a.btn.primary href="/links/new" { (ic("link")) "New link" } }
             p.lead { "Give each person one link. They open it in a browser to chat, or add it to Claude or ChatGPT as a connector." }
             @if links.is_empty() {
@@ -193,7 +193,7 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("New access link", Some(&a), None, html! {
         div.narrow.stack style="padding:16px 0 48px" {
-            @if let Some(msg) = q.get("flash") { div.flash role="status" { (msg) } }
+            @if let Some(msg) = q.get("flash") { (crate::web::notice("ok", html! { (msg) })) }
             div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { "New link" } }
             h1 { "New link" }
             @if projects.is_empty() {

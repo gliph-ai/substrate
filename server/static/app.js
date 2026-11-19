@@ -181,7 +181,7 @@ document.addEventListener("submit", (e) => {
     if (summary) h.append(el("div", "muted chat-sum", named(summary)));
     const ban = $("chat-banner"), btn = $("chat-send").querySelector("span");
     if (available(p)) { ban.hidden = true; btn.textContent = S.next === "answer_question" ? "Answer" : "Send"; }
-    else { ban.hidden = false; ban.textContent = "The agent is offline. A message waits until " + dev() + " starts it again."; btn.textContent = "Send anyway"; }
+    else { ban.hidden = false; $("chat-banner-text").textContent = "The agent is offline. A message waits until " + dev() + " starts it again."; btn.textContent = "Send anyway"; }
     $("chat-text").placeholder = S.next === "answer_question" ? "Answer the agent's question" : "Message " + (p.agent || "the agent");
   }
 
@@ -257,7 +257,7 @@ document.addEventListener("submit", (e) => {
   function addFiles(list) {
     for (const f of list) {
       if (pending.length >= 5) break;
-      if (f.size > 10 * 1024 * 1024) { const b = $("chat-banner"); b.hidden = false; b.textContent = f.name + " is over 10 MB."; continue; }
+      if (f.size > 10 * 1024 * 1024) { $("chat-banner").hidden = false; $("chat-banner-text").textContent = f.name + " is over 10 MB."; continue; }
       pending.push(f);
     }
     chips();
@@ -295,7 +295,7 @@ document.addEventListener("submit", (e) => {
       block(b); watch(); reload();
       history.replaceState(null, "", "#" + S.cid);
     } catch (err) {
-      const ban = $("chat-banner"); ban.hidden = false; ban.textContent = err.message;
+      $("chat-banner").hidden = false; $("chat-banner-text").textContent = err.message;
     } finally { btn.disabled = false; }
   });
   reload().then(() => { if (location.hash.startsWith("#c_")) open(location.hash.slice(1)); else fresh(); })
