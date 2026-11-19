@@ -438,6 +438,13 @@ async fn offline_rebind_busy_and_restart() {
     let other: String = sqlx::query_scalar("SELECT id FROM projects WHERE handle='other'").fetch_one(&t.app.db).await.unwrap();
     assert_eq!(t.form(&w.dev, &format!("/projects/{other}/delete"), &[]).await.status(), 303);
     assert!(sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE id=$1").bind(&other).fetch_optional(&t.app.db).await.unwrap().is_none());
+
+    // Gone for 10 minutes: an empty project is cleaned up, one with a queue stays.
+    let (_, tmp) = t.relay_api(&w.machine, "POST", "/relay/api/projects", json!({"handle": "tmp", "pane_id": "w7:p7", "agent": "claude", "cwd": "/work/tmp"})).await;
+    sqlx::query("UPDATE projects SET state='needs_rebind', gone_at=now() - interval '11 minutes' WHERE handle IN ('tmp','verna')").execute(&t.app.db).await.unwrap();
+    domain::housekeeping(&t.app).await.unwrap();
+    let left: Vec<String> = sqlx::query_scalar("SELECT id FROM projects WHERE id = ANY($1)").bind(vec![tmp["id"].as_str().unwrap().to_string(), w.pid.clone()]).fetch_all(&t.app.db).await.unwrap();
+    assert_eq!(left, vec![w.pid.clone()]);
 }
 
 #[tokio::test]

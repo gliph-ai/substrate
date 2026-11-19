@@ -392,7 +392,7 @@ async fn reconcile_panes(app: &AppInner, machine: &str, panes: &[Pane], push: bo
             _ => "needs_rebind".into(),
         };
         if state != p.state {
-            sqlx::query("UPDATE projects SET state=$2 WHERE id=$1").bind(&p.id).bind(&state).execute(&app.db).await?;
+            sqlx::query("UPDATE projects SET state=$2, gone_at=CASE WHEN $2='needs_rebind' THEN now() END WHERE id=$1").bind(&p.id).bind(&state).execute(&app.db).await?;
             if state == "needs_rebind" {
                 audit(app, &p.owner_id, &p.id, &p.handle, "project.needs_rebind", &p.pane_id, "pane gone or another agent in it").await;
             }
@@ -669,7 +669,7 @@ pub async fn bind_project(app: &AppInner, account: &str, p: &Project, machine: &
 pub async fn api_unbind(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>) -> Result<Json<Value>, Fail> {
     let (account, machine) = machine_auth(&app, &headers).await?;
     let p = owned_by_handle(&app, &account, &handle).await?;
-    sqlx::query("UPDATE projects SET pane_id='', agent_session='', state='unbound' WHERE id=$1").bind(&p.id).execute(&app.db).await?;
+    sqlx::query("UPDATE projects SET pane_id='', agent_session='', state='unbound', gone_at=now() WHERE id=$1").bind(&p.id).execute(&app.db).await?;
     interrupt_in_flight(&app, &p.id, "The project was unbound before the agent finished. The developer can deliver it again.").await?;
     audit(&app, &account, &p.id, &handle, "project.unbound", &p.pane_id, "").await;
     push_bindings(&app, &machine).await?;

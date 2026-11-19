@@ -839,10 +839,7 @@ pub async fn project_delete(State(app): State<App>, headers: HeaderMap, User(a):
     domain::require_owner(&app, &pid, &a.id).await?;
     let p = domain::project(&app, &pid).await?;
     audit(&app, &a.id, "", &a.label(), "project.deleted", &p.handle, &pid).await;
-    sqlx::query("DELETE FROM projects WHERE id=$1").bind(&pid).execute(&app.db).await?;
-    if !p.machine_id.is_empty() {
-        crate::relay::push_bindings(&app, &p.machine_id).await?;
-    }
+    domain::delete_project(&app, &p).await?;
     Ok(Redirect::to("/").into_response())
 }
 
