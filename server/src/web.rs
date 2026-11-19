@@ -1404,7 +1404,7 @@ pub async fn avatar(State(app): State<App>, Path(aid): Path<String>) -> Result<R
 pub async fn profile(State(app): State<App>, User(a): User, Query(f): Query<FlashQ>) -> Result<Response, Fail> {
     let _ = &app;
     Ok(Html(layout("Profile", Some(&a), None, html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
             h1 { "Profile" }
             form.card.stack method="post" action="/profile" enctype="multipart/form-data" {
@@ -1534,7 +1534,7 @@ pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<Flas
     let tokens: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as("SELECT hash, ref, expires_at FROM tokens WHERE account_id=$1 AND kind='pat' AND expires_at > now() ORDER BY created_at DESC")
         .bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Connect an assistant", Some(&a), None, html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
             h1 { "Connect your " span.grad { "assistant" } }
             p.lead { "Add Substrate once. Then tell your assistant what you found." }
@@ -1668,7 +1668,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
         "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
     ).bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             h1 { "Machines" }
             @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login"])) } }
             @else {
@@ -1707,7 +1707,7 @@ pub async fn machine_detail(State(app): State<App>, User(a): User, Path(mid): Pa
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
     let online = app.machine_online(&mid);
     Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             div.crumbs { a href="/machines" style="text-decoration:none" { "Machines" } span.sep { "/" } span.muted { (name) } }
             div.between {
                 div.row style="gap:14px" { span.ev-av.mark style="width:44px;height:44px" { (ic("monitor")) } h1 style="margin:0" { (name) } }

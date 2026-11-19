@@ -158,7 +158,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
          WHERE l.owner_id=$1 AND NOT l.revoked AND l.expires_at > now() GROUP BY l.id ORDER BY l.created_at DESC",
     ).bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Access links", Some(&a), None, html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = q.get("flash") { (crate::web::notice("ok", html! { (msg) })) }
             div.between { h1 { "Access " span.grad { "links" } } a.btn.primary href="/links/new" { (ic("link")) "New link" } }
             p.lead { "Give each person one link. They open it in a browser to chat, or add it to Claude or ChatGPT as a connector." }
@@ -202,7 +202,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
 pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("New access link", Some(&a), None, html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = q.get("flash") { (crate::web::notice("ok", html! { (msg) })) }
             div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { "New link" } }
             h1 { "New link" }
@@ -264,7 +264,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
     let host = app.cfg.host();
     let live = !revoked && l.expires_at > now();
     Ok(Html(layout("Access links", Some(&a), Some("/live".into()), html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { (l.label) } }
             div.between {
                 div.row style="gap:14px" { img.avatar-img src=(format!("/accounts/{acct}/avatar")) alt="" style="width:44px;height:44px"; h1 style="margin:0" { (l.label) } }
@@ -308,7 +308,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
 fn created(app: &AppInner, a: &crate::auth::Account, label: &str, secret: &str) -> Response {
     let u = format!("{}/mcp/{secret}", app.cfg.public_url);
     Html(layout("Link created", Some(a), None, html! {
-        div.narrow.stack style="padding:16px 0 48px" {
+        div.stack style="padding:12px 0 48px" {
             div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { (label) } }
             div.card.glow {
                 h3 { "Send this link to " (label) }
