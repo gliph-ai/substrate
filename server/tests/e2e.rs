@@ -537,3 +537,78 @@ async fn project_icon_from_the_relay() {
     let r = t.http.post(format!("{}/relay/api/projects/verna/icon", t.base)).bearer_auth(&m2).body(png).send().await.unwrap();
     assert_eq!(r.status(), 404);
 }
+
+/// An access link is an MCP server scoped to the projects and permissions the
+/// producer picked: no account, no sign-in, revocable.
+#[tokio::test]
+async fn access_link_scopes_projects_and_permissions() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let (st, other) = t.relay_api(&w.machine, "POST", "/relay/api/projects", json!({"handle": "tuli", "name": "Tuli", "pane_id": "w1:p2", "agent_session": "s2", "agent": "claude", "cwd": "/work/tuli"})).await;
+    assert_eq!(st, 200, "{other}");
+    let other = other["id"].as_str().unwrap().to_string();
+    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), pane("w1:p2", "s2", "idle")]).await;
+
+    // Verna only; skip approval; no replies, no files.
+    let p = format!("p_{}", w.pid);
+    let r = t.form(&w.dev, "/links", &[("label", "Sarah"), (p.as_str(), "on"), ("deploys", "on"), ("auto", "on"), ("days", "30")]).await;
+    assert_eq!(r.status(), 200);
+    let page = r.text().await.unwrap();
+    let secret = page.split("/mcp/").nth(1).unwrap().split(['<', '"']).next().unwrap().to_string();
+    assert_eq!(secret.len(), 64, "{secret}");
+    let url = format!("{}/mcp/{secret}", t.base);
+    let call = |tool: &'static str, args: Value| {
+        let (http, url) = (t.http.clone(), url.clone());
+        async move {
+            let r: Value = http.post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}))
+                .send().await.unwrap().json().await.unwrap();
+            r["result"].clone()
+        }
+    };
+
+    // Tools the link may not use are not listed.
+    let l: Value = t.http.post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).send().await.unwrap().json().await.unwrap();
+    let names: Vec<&str> = l["result"]["tools"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"send_message") && !names.contains(&"reply") && !names.contains(&"create_upload_link"), "{names:?}");
+
+    // Only the chosen project.
+    let ps = call("list_projects", json!({})).await;
+    let ps = ps["structuredContent"]["projects"].as_array().unwrap().clone();
+    assert_eq!(ps.len(), 1);
+    assert_eq!(ps[0]["project_id"], json!(w.pid));
+    assert_eq!(call("send_message", json!({"project_id": other, "text": "hi"})).await["isError"], true);
+
+    // No files on this link.
+    let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nx");
+    let r = call("send_message", json!({"project_id": w.pid, "text": "look", "attachments": [{"name": "a.png", "data_base64": png}]})).await;
+    assert_eq!(r["isError"], true);
+
+    // Auto relay: straight to the agent, no approval.
+    let r = call("send_message", json!({"project_id": w.pid, "text": "The export button is grey."})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let (did, dmid, _, reply) = deliver(&mut ws).await;
+    assert_eq!(dmid, mid);
+    send(&mut ws, DaemonFrame::Ack { delivery_id: did, stage: AckStage::Submitted, detail: String::new() }).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "final", "text": "Fixed the export button."})).await;
+    assert_eq!(st, 200);
+
+    // Replies are hidden from a link without the read permission.
+    let g = call("get_message", json!({"message_id": mid})).await;
+    assert_eq!(g["structuredContent"]["stage"], "completed");
+    assert!(!g.to_string().contains("Fixed the export button"), "{g}");
+
+    // The producer sees the link's use; revoking it stops it at once.
+    let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
+    let used: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT last_used_at FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
+    assert!(used.is_some());
+    let r = t.form(&w.dev, &format!("/links/{lid}/revoke"), &[]).await;
+    assert_eq!(r.status(), 303);
+    let gone = t.http.post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).send().await.unwrap();
+    assert_eq!(gone.status(), 404);
+
+    // Someone else cannot revoke or reuse it.
+    let r = t.form(&w.tester, &format!("/links/{lid}/revoke"), &[]).await;
+    assert_eq!(r.status(), 404);
+}

@@ -13,13 +13,23 @@ Substrate connects the people you invite to the coding agents on your computer. 
 
 ## Identities
 
-Substrate has five identities:
+Substrate has six identities:
 
 - accounts (email)
 - machines (paired relays)
 - MCP clients (OAuth registrations)
 - projects (bound to a machine, a Herdr pane and an agent session id)
 - reply tokens (one for each delivered message)
+- access links (one for each person a producer gives access)
+
+An access link (`/mcp/<secret>`) is a credential in the URL. Anyone with the
+link has its access, so each link is limited:
+
+- It reaches only the projects its producer picked.
+- Its permissions narrow the tools and the status it gets: no replies, no
+  deploy status or no files when those are off.
+- It expires (7 to 365 days), and revoking it stops it at once.
+- Messages wait for approval unless the producer turned that off for the link.
 
 Credentials and sessions:
 

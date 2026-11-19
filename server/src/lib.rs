@@ -7,6 +7,7 @@ pub mod aws;
 pub mod domain;
 pub mod files;
 pub mod gliph;
+pub mod links;
 pub mod mail;
 pub mod mcp;
 pub mod oauth;
@@ -121,6 +122,9 @@ pub fn router(app: App) -> Router {
         .route("/audit", get(web::audit_page))
         // MCP + OAuth
         .route("/mcp", get(mcp::get).post(mcp::post))
+        .route("/mcp/{secret}", get(mcp::get).post(mcp::post_link))
+        .route("/links", get(links::page).post(links::create_post))
+        .route("/links/{lid}/revoke", post(links::revoke_post))
         .route("/.well-known/oauth-protected-resource", get(oauth::protected_resource))
         .route("/.well-known/oauth-protected-resource/mcp", get(oauth::protected_resource))
         .route("/.well-known/oauth-authorization-server", get(oauth::auth_server))

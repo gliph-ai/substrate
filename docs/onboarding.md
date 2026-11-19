@@ -27,7 +27,28 @@
 
 An agent plugin in a linked channel can also write `@<project>`. One agent can send work to another this way.
 
-## Testers
+## Access links
+
+An access link gives one person access to the panes you pick, with no account
+and no sign-in.
+
+1. Open **Access links** in the console.
+2. Enter the person's name and pick the panes (projects).
+3. Pick the permissions:
+   - read the agent's replies and questions, and answer them
+   - see CI and deploy progress and the retest links
+   - attach files and download the agent's files
+   - skip your approval (flagged messages still wait for you)
+4. Pick an expiry and select **Create link**.
+5. Copy the link and send it. You see it only once.
+
+The person adds the link as a custom connector with authentication off. In
+Claude: Settings › Connectors › Add custom connector. In ChatGPT: Settings ›
+Apps › Advanced settings › Developer mode, then create an app with the link.
+
+The console shows when each link was last used. **Revoke** stops a link at once.
+
+## Testers with an account
 
 1. Open the invitation link.
 2. Accept it with your email or your Gliph account.

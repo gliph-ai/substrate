@@ -88,7 +88,7 @@ fn gliph_mark(size: u32) -> Markup {
 
 /// Shell commands with a copy button. The `$` prompt is drawn by CSS, so
 /// neither the button nor a hand selection copies it.
-fn cmd(lines: &[&str]) -> Markup {
+pub(crate) fn cmd(lines: &[&str]) -> Markup {
     html! {
         div.code.copyable {
             @for l in lines { span.ln { (l) } }
@@ -98,7 +98,7 @@ fn cmd(lines: &[&str]) -> Markup {
 }
 
 /// A button icon (Lucide shapes), stroked in the text colour.
-fn ic(name: &str) -> Markup {
+pub(crate) fn ic(name: &str) -> Markup {
     let d = match name {
         "log-out" => r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
@@ -144,7 +144,7 @@ fn hhmm(t: &DateTime<Utc>) -> String {
     t.format("%H:%M").to_string()
 }
 
-fn ago(t: &DateTime<Utc>) -> String {
+pub(crate) fn ago(t: &DateTime<Utc>) -> String {
     let s = (now() - *t).num_seconds().max(0);
     match s {
         0..=59 => "now".into(),
@@ -220,7 +220,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
                                     a href="/" { "Dashboard" }
-                                    a href="/connect" { "Connect an assistant" }
+                                    a href="/links" { "Access links" }
                                     a href="/machines" { "Machines" }
                                     a href="/audit" { "Audit log" }
                                 }
@@ -255,7 +255,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
     }
 }
 
-fn csrf(a: &Account) -> Markup {
+pub(crate) fn csrf(a: &Account) -> Markup {
     html! { input type="hidden" name="csrf" value=(a.csrf); }
 }
 
@@ -329,9 +329,9 @@ fn landing() -> Html<String> {
         }
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
             div.card {
-                h3 { "Connect an assistant" }
-                div.code.copyable { "https://substrate.gliph.sh/mcp" button.btn.small.copy type="button" data-copy="https://substrate.gliph.sh/mcp" { (ic("copy")) "Copy" } }
-                span.muted { "In Claude, add it as a custom connector and sign in once. In ChatGPT, turn on developer mode and create an app with it." }
+                h3 { "Give a tester access" }
+                span.muted { "Create an access link for the panes they may reach, with the permissions you pick. They paste it into Claude or ChatGPT as a custom connector. They need no account." }
+                div.row { a.btn href="/links" { (ic("link")) "Create an access link" } }
             }
             div.card {
                 h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
@@ -421,7 +421,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         div.stack style="padding:12px 0 48px" {
             div.between style="padding:8px 4px 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
-                div.row { a.btn href="/connect" { (ic("plug")) "Connect an assistant" } }
+                div.row { a.btn.primary href="/links" { (ic("link")) "New access link" } }
             }
             @if !approvals.is_empty() {
                 div.card.glow {
@@ -479,6 +479,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                         div.list {
                             div.label { "Projects you test" }
                             @for (pid, name, owner, etag) in &testing { a.item href=(format!("/p/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
+                            a.item href="/connect" { span.l { (ic("plug")) "Connect your assistant" } }
                         }
                     }
                     div.list {
@@ -606,7 +607,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.stack {
                                 @for (aid, email, name, role, trusted) in &members {
                                     div.between {
-                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { (role) @if *trusted { " · may auto relay" } } } }
+                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/links" { "access link" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
                                                 form.inline method="post" action=(format!("/p/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
