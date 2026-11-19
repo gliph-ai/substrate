@@ -45,6 +45,18 @@ static STATIC: &[(&str, &str, &[u8])] = &[
     ("logos/gliph.png", "image/png", include_bytes!("../static/logos/gliph.png")),
 ];
 
+/// A short hash of the stylesheet and script, put in their URLs so a deploy
+/// is never hidden behind the hour-long cache.
+pub fn asset_v() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        STATIC.iter().filter(|(n, _, _)| n.starts_with("app.")).for_each(|(_, _, b)| b.hash(&mut h));
+        format!("{:x}", h.finish() & 0xffff_ffff)
+    })
+}
+
 async fn static_file(Path(p): Path<String>) -> Response {
     match STATIC.iter().find(|(n, _, _)| *n == p) {
         Some((_, ct, b)) => ([(header::CONTENT_TYPE, *ct), (header::CACHE_CONTROL, "public, max-age=3600")], *b).into_response(),

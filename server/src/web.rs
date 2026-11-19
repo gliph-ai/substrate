@@ -98,7 +98,10 @@ fn cmd(lines: &[&str]) -> Markup {
 }
 
 fn orb(class: &str) -> Markup {
-    html! { span class=(format!("orb {class}")) aria-hidden="true" {} }
+    html! {
+        @if class == "xl" { span.orb-wrap aria-hidden="true" { span.orb.xl {} } }
+        @else { span class=(format!("orb {class}")) aria-hidden="true" {} }
+    }
 }
 
 fn initials(s: &str) -> String {
@@ -176,8 +179,8 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                 link rel="icon" href="/static/favicon.svg" type="image/svg+xml";
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
-                link rel="stylesheet" href="/static/app.css";
-                script src="/static/app.js" defer {}
+                link rel="stylesheet" href=(format!("/static/app.css?v={}", crate::asset_v()));
+                script src=(format!("/static/app.js?v={}", crate::asset_v())) defer {}
             }
             body data-live=[live] {
                 div.wrap {

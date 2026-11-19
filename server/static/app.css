@@ -147,21 +147,18 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 /* the orb */
 @keyframes orbspin { to { transform: rotate(360deg); } }
-@keyframes orbmorph {
-  0%, 100% { border-radius: 62% 38% 46% 54% / 55% 42% 58% 45%; transform: rotate(0deg) scale(1, 1); }
-  20% { border-radius: 40% 60% 65% 35% / 38% 58% 42% 62%; transform: rotate(14deg) scale(1.05, .95); }
-  40% { border-radius: 55% 45% 32% 68% / 64% 36% 60% 40%; transform: rotate(-8deg) scale(.95, 1.06); }
-  60% { border-radius: 34% 66% 52% 48% / 46% 64% 36% 54%; transform: rotate(10deg) scale(1.04, .97); }
-  80% { border-radius: 68% 32% 40% 60% / 40% 48% 52% 60%; transform: rotate(-12deg) scale(.97, 1.03); } }
-@keyframes orbglow { 0%, 100% { box-shadow: 0 0 60px 6px #2E4BFF, 0 0 140px 30px #3A1C8C; } 50% { box-shadow: 0 0 80px 10px #6A3BFF, 0 0 160px 40px #1C3FAF; } }
+
+@keyframes orbglow { 0%, 100% { filter: drop-shadow(0 0 28px #2E4BFF) drop-shadow(0 0 60px #3A1C8C); } 50% { filter: drop-shadow(0 0 40px #6A3BFF) drop-shadow(0 0 80px #1C3FAF); } }
 .orb { position: relative; display: inline-block; flex: none; border-radius: 50%; overflow: hidden; isolation: isolate; -webkit-mask-image: radial-gradient(#fff, #000); width: 20px; height: 20px;
-  background: conic-gradient(from 20deg, #1E3BFF, #7B2CFF, #FF5FCF, #FFB070, #5FE6FF, #1E3BFF); animation: orbmorph 9s ease-in-out infinite; }
+  background: conic-gradient(from 20deg, #1E3BFF, #7B2CFF, #FF5FCF, #FFB070, #5FE6FF, #1E3BFF); }
 .orb::before { content: ""; position: absolute; inset: -20%; mix-blend-mode: screen; animation: orbspin 9s linear infinite;
   background: conic-gradient(from 180deg at 55% 60%, #05061A 0deg, #0B1BFF 60deg, #05061A 120deg, #C04BFF 200deg, #05061A 260deg, #7FF0FF 320deg, #05061A 360deg); }
 .orb::after { content: ""; position: absolute; left: 18%; top: 14%; width: 34%; height: 22%; border-radius: 50%; background: radial-gradient(closest-side, #FFFFFF, #CFD8FF 40%, #5A6BFF00); }
-.orb.xl { width: 112px; height: 112px; animation: orbmorph 9s ease-in-out infinite, orbglow 5s ease-in-out infinite; }
+.orb.xl { width: 120px; height: 120px; }
+/* the glow sits on a wrapper so it follows the blob's outline (clip-path would cut a box-shadow) */
+.orb-wrap { display: inline-flex; flex: none; animation: orbglow 5s ease-in-out infinite; }
 .orb.thinking { animation-duration: 2.4s, 2s; }
-@media (prefers-reduced-motion: reduce) { .orb, .orb::before, .orb.xl { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .orb::before, .orb-wrap { animation: none; } }
 
 .flash { border-radius: 14px; padding: 12px 14px; background: var(--teal-bg); color: var(--teal); }
 .flash.bad { background: var(--red-bg); color: var(--red); }
