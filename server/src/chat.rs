@@ -32,9 +32,9 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                     aside.chat-side {
                         div.chat-brand { a.brand href=(if back { "/" } else { "#" }) { (orb("")) "Substrate" } }
                         button.btn #chat-new type="button" { (ic("square-pen")) "New chat" }
-                        div.label { "Projects" }
+                        div.label { (ic("folder")) "Projects" }
                         div #chat-projects {}
-                        div.label { "Recent" }
+                        div.label { (ic("clock")) "Recent" }
                         div #chat-convs {}
                         div.chat-who.faint { (who) }
                     }

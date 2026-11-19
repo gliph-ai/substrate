@@ -108,6 +108,9 @@ pub(crate) fn ic(name: &str) -> Markup {
         "message" => r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#,
         "monitor" => r#"<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>"#,
         "list" => r#"<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>"#,
+        "folder" => r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>"#,
+        "clock" => r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#,
+        "flask" => r#"<path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -529,10 +532,10 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 }
             }
             div.grid.tight {
-                div.card.stat { span.k { "Projects" } span.big { (owned.len()) } }
-                div.card.stat { span.k { "Machines online" } span.v { (machines.iter().filter(|m| app.machine_online(&m.0)).count()) " of " (machines.len()) } }
-                div.card.stat { span.k { "Waiting" } span.v style="color:var(--amber)" { (approvals.len()) } }
-                div.card.stat { span.k { "Completed" } span.big.grad { (completed) } }
+                div.card.stat { span.k { (ic("folder")) "Projects" } span.big { (owned.len()) } }
+                div.card.stat { span.k { (ic("monitor")) "Machines online" } span.v { (machines.iter().filter(|m| app.machine_online(&m.0)).count()) " of " (machines.len()) } }
+                div.card.stat { span.k { (ic("clock")) "Waiting" } span.v style="color:var(--amber)" { (approvals.len()) } }
+                div.card.stat { span.k { (ic("check")) "Completed" } span.big.grad { (completed) } }
             }
             @if owned.is_empty() {
                 div.card {
@@ -545,7 +548,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 div.main.stack {
                     @if !owned.is_empty() {
                         div.list {
-                            div.label { "Your projects" }
+                            div.label { (ic("folder")) "Your projects" }
                             @for p in &owned {
                                 a.item href=(format!("/projects/{}", p.id)) {
                                     span.l { (picon(&p.id, &p.name, &p.icon_etag, 28)) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) }
@@ -556,7 +559,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                     }
                     @if !recent.is_empty() {
                         div.list {
-                            div.label { "Recent" }
+                            div.label { (ic("clock")) "Recent" }
                             @for m in &recent {
                                 a.item href=(format!("/conversations/{}", m.conversation_id)) {
                                     span.l { (stage_tag(&m.stage)) span { (truncate(&m.text, 70)) } }
@@ -569,13 +572,13 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 div.side.stack {
                     @if !testing.is_empty() {
                         div.list {
-                            div.label { "Projects you test" }
+                            div.label { (ic("flask")) "Projects you test" }
                             @for (pid, name, owner, etag) in &testing { a.item href=(format!("/projects/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
                             a.item href="/connect" { span.l { (ic("plug")) "Connect your assistant" } }
                         }
                     }
                     div.list {
-                        div.label { "Machines" }
+                        div.label { (ic("monitor")) "Machines" }
                         @if machines.is_empty() { div.item { span.muted { "None yet. Run " span.mono { "substrate login" } } } }
                         @for (mid, name, seen) in &machines {
                             a.item href="/machines" {
@@ -737,7 +740,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 }
             }
             section id="conversations" class="list" {
-                div.label { "Conversations" }
+                div.label { (ic("message")) "Conversations" }
                 @if convs.is_empty() { div.item { span.muted { "No conversations yet." } } }
                 @for (cid, title, upd, stage, from, client, dep) in &convs {
                     a.item href=(format!("/conversations/{cid}")) {
