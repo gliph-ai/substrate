@@ -93,6 +93,40 @@ document.addEventListener("submit", (e) => {
     return res.structuredContent || {};
   }
 
+  // Text to nodes: ``` fences, `code`, **bold** and http(s) links. No innerHTML.
+  function inline(text, into) {
+    const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*|https?:\/\/[^\s<>"'`)\]]+)/g;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) into.append(text.slice(last, m.index));
+      const t = m[0];
+      if (t[0] === "`") into.append(el("code", null, t.slice(1, -1)));
+      else if (t[0] === "*") into.append(el("strong", null, t.slice(2, -2)));
+      else { const a = el("a", null, t); a.href = t; a.target = "_blank"; a.rel = "noopener noreferrer"; into.append(a); }
+      last = m.index + t.length;
+    }
+    into.append(text.slice(last));
+  }
+  function rich(text) {
+    const box = el("div", "rich");
+    String(text || "").split(/```/).forEach((part, i) => {
+      if (i % 2) { const pre = el("pre"); pre.append(el("code", null, part.replace(/^[\w-]*\n/, "").replace(/\n$/, ""))); box.append(pre); }
+      else if (part) { const d = el("div"); inline(part, d); box.append(d); }
+    });
+    return box;
+  }
+  function files(list) {
+    const box = el("div", "files");
+    for (const f of list || []) {
+      if (!f.url) continue;
+      const a = el("a", (f.type || "").startsWith("image/") ? "thumb" : "file"); a.href = f.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      if (a.className === "thumb") { const i = el("img"); i.src = f.url; i.alt = f.name; i.loading = "lazy"; a.append(i); }
+      else a.append(el("span", null, f.name));
+      box.append(a);
+    }
+    return box;
+  }
+
   const project = () => S.projects.find((p) => p.project_id === S.pid);
   const available = (p) => p && p.agent_online;
   function pill(p) {
@@ -147,10 +181,10 @@ document.addEventListener("submit", (e) => {
       if (S.seen.has(e.seq)) continue;
       S.seen.add(e.seq);
       let n;
-      if (e.actor === "human") n = el("div", "msg me", e.text);
+      if (e.actor === "human") { n = el("div", "msg me"); n.append(rich(e.text), files(e.attachments)); }
       else if (e.actor === "agent") {
         n = el("div", "msg agent");
-        n.append(el("div", "who", e.name + (e.kind === "question" ? " asks" : "")), el("div", null, e.agent_text != null ? e.agent_text : "The developer did not share replies on this link."));
+        n.append(el("div", "who", e.name + (e.kind === "question" ? " asks" : "")), rich(e.agent_text), files(e.attachments));
       } else if (e.actor === "deploy") n = el("div", "note", "Deploy: " + (e.agent_text || ""));
       else n = el("div", "note", e.text || e.kind);
       log.append(n);
@@ -203,19 +237,45 @@ document.addEventListener("submit", (e) => {
     sidebar(convs); head();
   }
 
+  const pending = [];
+  function addFiles(list) {
+    for (const f of list) {
+      if (pending.length >= 5) break;
+      if (f.size > 10 * 1024 * 1024) { const b = $("chat-banner"); b.hidden = false; b.textContent = f.name + " is over 10 MB."; continue; }
+      pending.push(f);
+    }
+    chips();
+  }
+  function chips() {
+    const box = $("chat-files"); box.replaceChildren();
+    pending.forEach((f, i) => {
+      const c = el("span", "chip", f.name), x = el("button", null, "×"); x.type = "button"; x.setAttribute("aria-label", "Remove " + f.name);
+      x.onclick = () => { pending.splice(i, 1); chips(); };
+      c.append(x); box.append(c);
+    });
+    box.hidden = !pending.length;
+  }
+  const b64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = no; r.readAsDataURL(f); });
+  $("chat-attach").onclick = () => $("chat-file").click();
+  $("chat-file").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
+  document.addEventListener("paste", (e) => { const f = [...(e.clipboardData || {}).files || []]; if (f.length) { e.preventDefault(); addFiles(f); } });
+  root.addEventListener("dragover", (e) => e.preventDefault());
+  root.addEventListener("drop", (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+
   $("chat-new").onclick = fresh;
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("chat-form").requestSubmit(); } });
   $("chat-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = ta.value.trim(); if (!text || !S.pid) return;
+    const text = ta.value.trim(); if ((!text && !pending.length) || !S.pid) return;
     const btn = $("chat-send"); btn.disabled = true;
     try {
       const b = S.next === "answer_question"
         ? await call("reply", { message_id: S.mid, text })
-        : await call("send_message", { project_id: S.pid, text, conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID() });
-      ta.value = ""; ta.style.height = "auto";
+        : await call("send_message", { project_id: S.pid, text: text || "(files attached)", conversation_id: S.cid || undefined, send_anyway: !available(project()), idempotency_key: crypto.randomUUID(),
+            attachments: pending.length ? await Promise.all(pending.map(async (f) => ({ name: f.name, data_base64: await b64(f) }))) : undefined });
+      ta.value = ""; ta.style.height = "auto"; pending.length = 0; chips();
       block(b); watch(); reload();
       history.replaceState(null, "", "#" + S.cid);
     } catch (err) {

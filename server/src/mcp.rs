@@ -147,6 +147,7 @@ pub(crate) async fn serve(app: &AppInner, headers: &HeaderMap, body: &[u8], acco
                 if let Some(p) = perms {
                     crate::links::restrict(&mut v, p);
                 }
+                sign_files(app, account, &mut v);
                 v
             });
             Ok(match r {
@@ -159,6 +160,24 @@ pub(crate) async fn serve(app: &AppInner, headers: &HeaderMap, body: &[u8], acco
     match result {
         Ok(r) => Json(json!({"jsonrpc": "2.0", "id": id, "result": r})).into_response(),
         Err((c, m)) => Json(rpc_err(id, c, m)).into_response(),
+    }
+}
+
+/// Give each event attachment a download URL for this viewer, valid one hour.
+fn sign_files(app: &AppInner, account: &str, v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if let Some(Value::Array(list)) = o.get_mut("attachments") {
+                for a in list.iter_mut().filter_map(|a| a.as_object_mut()) {
+                    if let Some(id) = a.get("id").and_then(|i| i.as_str()).map(str::to_string) {
+                        a.insert("url".into(), json!(crate::web::signed_file_url(app, &id, account)));
+                    }
+                }
+            }
+            o.values_mut().for_each(|x| sign_files(app, account, x));
+        }
+        Value::Array(l) => l.iter_mut().for_each(|x| sign_files(app, account, x)),
+        _ => {}
     }
 }
 

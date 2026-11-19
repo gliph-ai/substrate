@@ -69,6 +69,13 @@ pub fn restrict(v: &mut Value, p: Perms) {
             evs.retain(|e| e.get("kind").and_then(|k| k.as_str()) != Some("deploy"));
         }
     }
+    if !p.files {
+        if let Some(evs) = v.get_mut("new_events").and_then(|e| e.as_array_mut()) {
+            for e in evs.iter_mut().filter_map(|e| e.as_object_mut()) {
+                e.remove("attachments");
+            }
+        }
+    }
     if let Some(latest) = v.get_mut("latest") {
         restrict(latest, p);
     }

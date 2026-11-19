@@ -44,8 +44,11 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                             div.chat-empty { (orb("xl")) h2 { "Talk to the developer's agent." } p.muted { "Report a bug, ask a question or request a change. The developer sees every message." } }
                         }
                         div.chat-banner #chat-banner hidden {}
+                        div.chat-files #chat-files hidden {}
                         form.chat-compose #chat-form {
-                            textarea #chat-text rows="1" placeholder="Message the agent" required {}
+                            input #chat-file type="file" multiple hidden accept="image/png,image/jpeg,image/webp,application/pdf,text/plain";
+                            button.btn.tertiary.icon #chat-attach type="button" aria-label="Attach files" { (ic("paperclip")) }
+                            textarea #chat-text rows="1" placeholder="Message the agent" {}
                             button.btn.primary #chat-send type="submit" { (ic("send")) span { "Send" } }
                         }
                     }

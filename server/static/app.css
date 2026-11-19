@@ -230,7 +230,23 @@ table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last
 .chat-compose textarea { flex: 1; resize: none; border: 0; background: transparent; color: var(--text); font: inherit; padding: 8px 10px; min-height: 0; height: auto; max-height: 220px; box-shadow: none; }
 .chat-compose { align-items: center; }
 .chat-compose textarea:focus-visible { outline: none; }
+.rich > div { white-space: pre-wrap; }
+.rich code { font-family: var(--mono); font-size: .88em; background: rgba(0,0,0,.28); padding: 1px 5px; border-radius: 6px; }
+.rich pre { margin: 8px 0; padding: 12px 14px; background: #07080B; border-radius: 12px; overflow-x: auto; white-space: pre; }
+.rich pre code { background: none; padding: 0; font-size: 13px; }
+.msg a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.msg.agent a { color: #BFC8FF; }
+.files { display: flex; flex-wrap: wrap; gap: 8px; }
+.files:not(:empty) { margin-top: 8px; }
+.files .thumb img { display: block; max-width: 260px; max-height: 200px; border-radius: 10px; }
+.files .file { display: inline-flex; padding: 6px 10px; border-radius: 10px; background: rgba(0,0,0,.28); font-size: 13px; }
+.chat-files { display: flex; flex-wrap: wrap; gap: 6px; max-width: 860px; width: calc(100% - 56px); margin: 0 auto 8px; }
+.chat-files[hidden] { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; border-radius: 999px; background: var(--card-2); font-size: 13px; }
+.chip button { border: 0; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.btn.icon { padding: 10px; }
 @media (max-width: 760px) {
+  .chat-files { width: calc(100% - 32px); }
   .chat-body { overflow: auto; height: auto; }
   .chat { grid-template-columns: minmax(0, 1fr); height: auto; }
   .chat-side { max-height: 40dvh; }

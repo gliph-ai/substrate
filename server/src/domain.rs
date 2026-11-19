@@ -429,8 +429,18 @@ pub async fn status_block(app: &AppInner, m: &Message, since: i64, tester: bool)
     let held_reply = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM events WHERE message_id=$1 AND held")
         .bind(&m.id).fetch_one(&app.db).await? > 0;
 
+    let atts = sqlx::query_as::<_, Attachment>("SELECT * FROM attachments WHERE conversation_id=$1 ORDER BY created_at").bind(&m.conversation_id).fetch_all(&app.db).await?;
     let new_events: Vec<Value> = events.iter().filter(|e| !(tester && e.held)).map(|e| {
         let mut v = json!({"seq": e.seq, "time": e.created_at, "actor": e.actor_kind, "name": e.actor_name, "kind": e.kind});
+        // The agent's event lists its files by id; a person's message owns the
+        // files uploaded with it. The MCP layer adds a signed URL per viewer.
+        let ids: Vec<&str> = e.data.get("attachments").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+        let mine: Vec<Value> = atts.iter()
+            .filter(|x| if e.actor_kind == "agent" { ids.contains(&x.id.as_str()) } else { e.actor_kind == "human" && x.message_id == e.message_id && x.origin == "tester" })
+            .map(|x| json!({"id": x.id, "name": x.name, "type": x.mime, "size": x.size})).collect();
+        if !mine.is_empty() {
+            v["attachments"] = json!(mine);
+        }
         if e.actor_kind == "agent" || e.actor_kind == "deploy" {
             v["agent_text"] = json!(safety::defang_links(&e.text, &own_host, &p.retest_hosts));
         } else {
