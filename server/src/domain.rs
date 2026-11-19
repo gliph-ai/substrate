@@ -545,3 +545,19 @@ pub async fn store_attachment(
     ).bind(&aid).bind(project).bind(conversation).bind(message).bind(uploader).bind(origin).bind(&name).bind(mime)
      .bind(bytes.len() as i64).bind(&sha).fetch_one(&app.db).await?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::brand;
+
+    #[test]
+    fn brands_for_gliph_logos() {
+        assert_eq!(brand("claude"), Some("claude"));
+        assert_eq!(brand("Claude"), Some("claude"));
+        assert_eq!(brand("codex"), Some("openai"));
+        assert_eq!(brand("ChatGPT"), Some("openai"));
+        assert_eq!(brand("gemini"), Some("gemini"));
+        assert_eq!(brand("personal token"), None);
+        assert_eq!(brand("Gliph"), None);
+    }
+}
