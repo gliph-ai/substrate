@@ -4,7 +4,7 @@
 
 1. Sign in at https://substrate.gliph.sh with an email link or your Gliph account.
 2. Install the relay on the Mac that runs your agents, and pair it. Refer to [cli.md](cli.md).
-3. Bind a project to its Herdr pane: `substrate project add <handle> --pane <id>`.
+3. Substrate makes a project for each agent that Herdr runs, named after its pane. A restarted agent in the same folder keeps its project.
 4. On the project page, add a description and the retest hosts for testers (for example `verna.app`).
 5. Create an invitation link and send it to your tester. Copy it at once: the page shows it one time.
 6. Approve messages on the project page, with `substrate approve <id>`, or with `/substrate approve <id>` in a linked Gliph channel.

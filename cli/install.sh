@@ -23,6 +23,4 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "Add ~/.local/bin to your P
 echo
 echo "Next:"
 echo "  substrate login            # pair this computer"
-echo "  substrate herdr discover   # see your agents"
-echo "  substrate project add <handle> --pane <pane-id>"
-echo "  substrate daemon install   # keep the relay running"
+echo "  substrate daemon install   # keep the relay running; each agent in Herdr gets a project"

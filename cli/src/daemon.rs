@@ -506,8 +506,8 @@ pub async fn run(relay: Arc<Relay>, api: Arc<crate::api::Api>) -> Result<()> {
     let ws_url = format!("{}/relay/ws", api.server.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
     let deploy = crate::deploy::Watcher::new(relay.paths.clone(), api.clone());
     tokio::spawn(async move { deploy.run().await });
-    // A project added from the web has no logo yet: find it in the bound
-    // folder, like `substrate project add` does. One try per project per run.
+    // An automatic project has no logo yet: find it in the bound folder,
+    // like `substrate project add` does. One try per project per run.
     let (r2, a2) = (relay.clone(), api.clone());
     tokio::spawn(async move {
         let mut tried = std::collections::HashSet::new();

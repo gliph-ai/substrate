@@ -120,8 +120,8 @@ pub fn router(app: App) -> Router {
         .route("/pair", get(web::pair_get).post(web::pair_post))
         .route("/machines", get(web::machines))
         .route("/machines/{mid}/revoke", post(web::machine_revoke))
-        .route("/machines/{mid}/projects", post(web::machine_add_project))
         .route("/projects/{pid}/bind", post(web::project_bind))
+        .route("/projects/{pid}/delete", post(web::project_delete))
         .route("/audit", get(web::audit_page))
         // MCP + OAuth
         .route("/mcp", get(mcp::get).post(mcp::post))

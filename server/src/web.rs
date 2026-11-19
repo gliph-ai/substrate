@@ -103,6 +103,7 @@ pub(crate) fn ic(name: &str) -> Markup {
         "log-out" => r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#,
         "monitor-off" => r#"<path d="M17 17H4a2 2 0 0 1-2-2V5c0-1.5 1-2 1-2"/><path d="M22 15V5a2 2 0 0 0-2-2H9"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m2 2 20 20"/>"#,
         "square-pen" => r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>"#,
+        "paperclip" => r#"<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -393,7 +394,7 @@ fn landing() -> Html<String> {
             }
             div.card {
                 h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
-                (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate project add verna --pane w9P:p1", "substrate daemon install"]))
+                (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate daemon install"]))
             }
         }
     }).into_string())
@@ -521,8 +522,8 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
             @if owned.is_empty() {
                 div.card {
                     h3 { "Set up your first project" }
-                    p.muted { "Install the relay on the Mac where your agent runs, sign it in, and bind a Herdr pane." }
-                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate herdr discover", "substrate project add <handle> --pane <pane-id>", "substrate daemon install"]))
+                    p.muted { "Install the relay on the Mac where your agents run. Each agent in Herdr gets a project." }
+                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate daemon install"]))
                 }
             }
             div.split {
@@ -762,6 +763,9 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/invite substrate" } ", then " span.mono { "/substrate link " (p.handle) } } }
                             @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/projects/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small.tertiary type="submit" { (ic("x")) "Unlink" } } }
                         }
+                        form method="post" action=(format!("/projects/{pid}/delete")) data-confirm="Delete this project? Its conversations, files and access go too. An agent still running in its pane gets a new project." {
+                            (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Delete project" }
+                        }
                     }
                 }
             }
@@ -828,6 +832,18 @@ pub async fn project_settings(State(app): State<App>, headers: HeaderMap, User(a
         .execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "project.settings", &pid, &format!("retest_hosts={} ci_public={}", hosts.join(","), f.ci_public.is_some())).await;
     Ok(Redirect::to(&format!("/projects/{pid}?flash=Saved.")).into_response())
+}
+
+pub async fn project_delete(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let p = domain::project(&app, &pid).await?;
+    audit(&app, &a.id, "", &a.label(), "project.deleted", &p.handle, &pid).await;
+    sqlx::query("DELETE FROM projects WHERE id=$1").bind(&pid).execute(&app.db).await?;
+    if !p.machine_id.is_empty() {
+        crate::relay::push_bindings(&app, &p.machine_id).await?;
+    }
+    Ok(Redirect::to("/").into_response())
 }
 
 #[derive(Deserialize)]
@@ -1496,8 +1512,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                                     },
                                     None => div.item {
                                         span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } }
-                                        span.r { (status_tag(status))
-                                            form.inline method="post" action=(format!("/machines/{mid}/projects")) { (csrf(&a)) input type="hidden" name="pane_id" value=(pid); button.btn.small type="submit" { (ic("plug")) "Add project" } } }
+                                        span.r { (status_tag(status)) }
                                     },
                                 }
                             }
@@ -1522,47 +1537,6 @@ fn spaces(panes: &serde_json::Value) -> Vec<(String, Vec<&serde_json::Value>)> {
         }
     }
     out
-}
-
-#[derive(Deserialize)]
-pub struct PaneForm {
-    csrf: String,
-    pane_id: String,
-}
-
-/// Add project on the Machines page: a project for a pane the relay reported,
-/// named after the pane, with a handle made from that name.
-pub async fn machine_add_project(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<PaneForm>) -> Result<Response, Fail> {
-    check_csrf(&app, &headers, &a, &f.csrf)?;
-    let panes: serde_json::Value = sqlx::query_scalar("SELECT panes FROM machines WHERE id=$1 AND account_id=$2 AND NOT revoked")
-        .bind(&mid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such computer"))?;
-    let pn = panes.as_array().into_iter().flatten().find(|p| p["pane_id"] == f.pane_id.as_str()).ok_or_else(|| Fail::new(404, "that pane is gone"))?;
-    let s = |k: &str| pn[k].as_str().unwrap_or("").to_string();
-    let cwd = s("cwd");
-    let name = if s("title").is_empty() { cwd.rsplit('/').next().unwrap_or("").to_string() } else { s("title") };
-    let base = handle_from(&name);
-    let mut last = Fail::new(409, "no free handle");
-    for n in 1..10 {
-        let handle = if n == 1 { base.clone() } else { format!("{}-{n}", &base[..base.len().min(29)]) };
-        let add = crate::relay::AddProject { handle, name: name.clone(), pane_id: f.pane_id.clone(), agent_session: s("agent_session"), agent: s("agent"), cwd: cwd.clone() };
-        match crate::relay::create_project(&app, &a.id, &mid, &add).await {
-            Ok(pid) => return Ok(Redirect::to(&format!("/projects/{pid}")).into_response()),
-            Err(e) if e.0.as_u16() == 409 => last = e,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(last)
-}
-
-/// "Minhaj_nl" -> "minhaj-nl": lowercase letters, digits and -, a letter first, up to 32.
-fn handle_from(name: &str) -> String {
-    let mut h: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-    h = h.split('-').filter(|x| !x.is_empty()).collect::<Vec<_>>().join("-");
-    if !h.starts_with(|c: char| c.is_ascii_lowercase()) {
-        h = format!("p-{h}");
-    }
-    h.truncate(32);
-    h.trim_end_matches('-').to_string()
 }
 
 pub async fn machine_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -1612,16 +1586,4 @@ pub async fn download(State(app): State<App>, Path(rest): Path<String>) -> Resul
 
 pub fn not_found() -> Html<String> {
     error_page("Not found", "There's nothing at this address.")
-}
-
-
-#[cfg(test)]
-mod handle_tests {
-    #[test]
-    fn handle_from_pane_names() {
-        assert_eq!(super::handle_from("Minhaj_nl"), "minhaj-nl");
-        assert_eq!(super::handle_from("Gliph Substrate"), "gliph-substrate");
-        assert_eq!(super::handle_from("2fa app"), "p-2fa-app");
-        assert!(crate::relay::valid_handle(&super::handle_from(&"x".repeat(50))));
-    }
 }

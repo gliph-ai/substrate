@@ -248,7 +248,8 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             sqlx::query("UPDATE machines SET version=$2, panes=$3, last_seen=now() WHERE id=$1")
                 .bind(machine).bind(proto::sanitize(&version, 32)).bind(sqlx::types::Json(&panes)).execute(&app.db).await?;
             domain::machine_presence(app, machine, true).await?;
-            reconcile_panes(app, machine, &panes).await?;
+            // Welcome carries whatever this creates or moves.
+            reconcile_panes(app, machine, &panes, false).await?;
             let _ = tx.send(CloudFrame::Welcome { machine_id: machine.to_string(), projects: bindings(app, machine).await? });
             // Anything sent but never acknowledged goes again with the same
             // delivery id; the relay drops a repeat it already holds.
@@ -264,7 +265,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
         }
         DaemonFrame::Panes { panes } => {
             sqlx::query("UPDATE machines SET panes=$2, last_seen=now() WHERE id=$1").bind(machine).bind(sqlx::types::Json(&panes)).execute(&app.db).await?;
-            reconcile_panes(app, machine, &panes).await?;
+            reconcile_panes(app, machine, &panes, true).await?;
         }
         DaemonFrame::Status { project_id, state } => {
             let allowed = ["idle", "working", "blocked", "done", "unknown", "offline", "needs_rebind"];
@@ -326,10 +327,63 @@ async fn project_ids(app: &AppInner, machine: &str) -> Result<Vec<String>, Fail>
 
 /// A bound pane that is gone, or now hosts a different agent session, needs a
 /// rebind: never deliver to whatever took its place.
-async fn reconcile_panes(app: &AppInner, machine: &str, panes: &[Pane]) -> Result<(), Fail> {
-    let ps = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE machine_id=$1 AND pane_id<>''").bind(machine).fetch_all(&app.db).await?;
-    for p in ps {
-        let live = panes.iter().find(|x| x.pane_id == p.pane_id);
+/// Keep projects 1-1 with the agents Herdr runs on this machine:
+/// 1. an agent restarted in its pane, in the same folder, keeps its project;
+/// 2. a project whose pane closed moves to the one new agent in its folder;
+/// 3. any other agent gets a new project, named after its pane.
+///
+/// Nothing ever follows an agent into another folder or onto another machine.
+async fn reconcile_panes(app: &AppInner, machine: &str, panes: &[Pane], push: bool) -> Result<(), Fail> {
+    let Some(account): Option<String> = sqlx::query_scalar("SELECT account_id FROM machines WHERE id=$1").bind(machine).fetch_optional(&app.db).await? else { return Ok(()) };
+    let agents: Vec<&Pane> = panes.iter().filter(|x| !x.agent.is_empty()).collect();
+    let mut ps = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE machine_id=$1 AND pane_id<>'' ORDER BY created_at").bind(machine).fetch_all(&app.db).await?;
+    let mut moved: Vec<String> = vec![];
+    let claimed = |ps: &[Project], pane: &str| ps.iter().any(|p| p.pane_id == pane);
+    for i in 0..ps.len() {
+        let p = &ps[i];
+        let live = agents.iter().find(|x| x.pane_id == p.pane_id);
+        let same = |x: &Pane| !p.cwd.is_empty() && x.cwd == p.cwd && x.agent == p.agent;
+        let target: Option<&Pane> = match live {
+            Some(x) if x.agent_session == p.agent_session || p.agent_session.is_empty() => None,
+            Some(x) if same(x) => Some(x),
+            Some(_) => None,
+            None => {
+                let c: Vec<&&Pane> = agents.iter().filter(|x| same(x) && !claimed(&ps, &x.pane_id)).collect();
+                if c.len() == 1 { Some(c[0]) } else { None }
+            }
+        };
+        if let Some(x) = target {
+            let why = if x.pane_id == p.pane_id { "agent restarted in its pane" } else { "pane closed; the agent in the same folder took over" };
+            sqlx::query("UPDATE projects SET pane_id=$2, agent_session=$3 WHERE id=$1").bind(&p.id).bind(&x.pane_id).bind(&x.agent_session).execute(&app.db).await?;
+            sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE project_id=$1 AND stage='dispatched'").bind(&p.id).execute(&app.db).await?;
+            interrupt_in_flight(app, &p.id, "The agent restarted before it finished. The developer can deliver it again.").await?;
+            audit(app, &p.owner_id, &p.id, &p.handle, "project.followed", &x.pane_id, why).await;
+            moved.push(p.id.clone());
+            ps[i].pane_id = x.pane_id.clone();
+            ps[i].agent_session = x.agent_session.clone();
+        }
+    }
+    for x in &agents {
+        if claimed(&ps, &x.pane_id) {
+            continue;
+        }
+        let name = if x.title.is_empty() { x.cwd.rsplit('/').next().unwrap_or("").to_string() } else { x.title.clone() };
+        let base = handle_from(&name);
+        for n in 1..10 {
+            let handle = if n == 1 { base.clone() } else { format!("{}-{n}", &base[..base.len().min(29)]) };
+            let add = AddProject { handle, name: name.clone(), pane_id: x.pane_id.clone(), agent_session: x.agent_session.clone(), agent: x.agent.clone(), cwd: x.cwd.clone() };
+            match create_project(app, &account, machine, &add, push).await {
+                Ok(pid) => { ps.push(domain::project(app, &pid).await?); break; }
+                Err(e) if e.0.as_u16() == 409 => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    if !moved.is_empty() && push {
+        push_bindings(app, machine).await?;
+    }
+    for p in &ps {
+        let live = agents.iter().find(|x| x.pane_id == p.pane_id);
         let state = match live {
             Some(x) if x.agent_session == p.agent_session || p.agent_session.is_empty() => match x.status.as_str() {
                 "idle" | "done" | "working" | "blocked" => x.status.clone(),
@@ -340,14 +394,25 @@ async fn reconcile_panes(app: &AppInner, machine: &str, panes: &[Pane]) -> Resul
         if state != p.state {
             sqlx::query("UPDATE projects SET state=$2 WHERE id=$1").bind(&p.id).bind(&state).execute(&app.db).await?;
             if state == "needs_rebind" {
-                audit(app, &p.owner_id, &p.id, &p.handle, "project.needs_rebind", &p.pane_id, "pane gone or session changed").await;
+                audit(app, &p.owner_id, &p.id, &p.handle, "project.needs_rebind", &p.pane_id, "pane gone or another agent in it").await;
             }
-            if matches!(state.as_str(), "idle" | "done") {
-                domain::pump(app, &p.id).await?;
-            }
+        }
+        if (state != p.state || moved.contains(&p.id)) && matches!(state.as_str(), "idle" | "done") {
+            domain::pump(app, &p.id).await?;
         }
     }
     Ok(())
+}
+
+/// "Minhaj_nl" -> "minhaj-nl": lowercase letters, digits and -, a letter first, up to 32.
+pub fn handle_from(name: &str) -> String {
+    let mut h: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    h = h.split('-').filter(|x| !x.is_empty()).collect::<Vec<_>>().join("-");
+    if !h.starts_with(|c: char| c.is_ascii_lowercase()) {
+        h = format!("p-{h}");
+    }
+    h.truncate(32);
+    h.trim_end_matches('-').to_string()
 }
 
 // ---- reports from the agent ----
@@ -525,13 +590,13 @@ pub async fn api_add_project(State(app): State<App>, headers: HeaderMap, Json(a)
     if !valid_handle(&a.handle) {
         return Err(Fail::new(400, "a handle is lowercase letters, digits and -, starting with a letter, up to 32"));
     }
-    let pid = create_project(&app, &account, &machine, &a).await?;
+    let pid = create_project(&app, &account, &machine, &a, true).await?;
     Ok(Json(json!({"id": pid, "handle": a.handle})))
 }
 
-/// Create a project bound to a pane. The CLI (`project add`) and the
-/// Machines page (Add project) both come here.
-pub async fn create_project(app: &AppInner, account: &str, machine: &str, a: &AddProject) -> Result<String, Fail> {
+/// Create a project bound to a pane: `substrate project add`, and the
+/// relay's automatic project for each agent pane.
+pub async fn create_project(app: &AppInner, account: &str, machine: &str, a: &AddProject, push: bool) -> Result<String, Fail> {
     let name = if a.name.trim().is_empty() { a.handle.clone() } else { proto::sanitize(&a.name, 64) };
     let pid = id("p");
     let r = sqlx::query("INSERT INTO projects (id, owner_id, handle, name, machine_id, pane_id, agent_session, agent, cwd, state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown')")
@@ -546,7 +611,9 @@ pub async fn create_project(app: &AppInner, account: &str, machine: &str, a: &Ad
     r?;
     sqlx::query("INSERT INTO members (project_id, account_id, role) VALUES ($1,$2,'owner')").bind(&pid).bind(account).execute(&app.db).await?;
     audit(app, account, &pid, &a.handle, "project.created", &pid, &a.pane_id).await;
-    push_bindings(app, machine).await?;
+    if push {
+        push_bindings(app, machine).await?;
+    }
     Ok(pid)
 }
 
@@ -594,7 +661,7 @@ pub async fn bind_project(app: &AppInner, account: &str, p: &Project, machine: &
     // and not at the next pane change.
     let panes: Option<sqlx::types::Json<Vec<Pane>>> = sqlx::query_scalar("SELECT panes FROM machines WHERE id=$1").bind(machine).fetch_optional(&app.db).await?;
     if let Some(ps) = panes {
-        reconcile_panes(app, machine, &ps.0).await?;
+        reconcile_panes(app, machine, &ps.0, true).await?;
     }
     Ok(())
 }

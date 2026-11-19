@@ -8,7 +8,7 @@ use std::process::Command;
 
 pub const CANDIDATES: &[&str] = &[
     "design/icon/icon-1024.png", "design/icon/icon-512.png", "design/icon/icon.png",
-    "*/Assets.xcassets/AppIcon.appiconset/*1024*.png", "*/*/Assets.xcassets/AppIcon.appiconset/*1024*.png",
+    "*/Assets.xcassets/AppIcon.appiconset/*1024*.png", "*/*/Assets.xcassets/AppIcon.appiconset/*1024*.png", "*/*/*/Assets.xcassets/AppIcon.appiconset/*1024*.png",
     "apple-touch-icon.png", "public/apple-touch-icon.png", "*/public/apple-touch-icon.png", "*/*/public/apple-touch-icon.png",
     "public/icon-512.png", "*/public/icon-512.png",
     "src-tauri/icons/icon.png", "*/src-tauri/icons/icon.png", "*/*/src-tauri/icons/icon.png",

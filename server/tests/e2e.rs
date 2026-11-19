@@ -195,6 +195,11 @@ async fn full_loop_approval_delivery_reply_deploy() {
     assert_eq!(s["next_action"], "check_later");
     let mid = s["message_id"].as_str().unwrap().to_string();
     quiet(&mut ws).await;
+    // The tester's own message carries its screenshot, with a URL that opens it.
+    let f = &s["new_events"][0]["attachments"][0];
+    assert_eq!(f["type"], "image/png", "{s}");
+    let got = t.http.get(f["url"].as_str().unwrap()).send().await.unwrap();
+    assert_eq!(got.status(), 200);
 
     // Same idempotency key: same message, no duplicate.
     let again = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "The settings page doesn't save my preferences.", "idempotency_key": "k1"})).await;
@@ -368,28 +373,26 @@ async fn offline_rebind_busy_and_restart() {
     let g = t.mcp(&w.pat, "get_message", json!({"message_id": a})).await["structuredContent"].clone();
     assert!(g["summary"].as_str().unwrap().contains("offline"), "{g}");
 
-    // Reconnect with the pane gone: nothing is delivered anywhere.
-    let mut ws = t.ws(&w.machine, vec![pane("w1:p9", "other", "idle")]).await;
+    // Reconnect with the pane gone and an agent in another folder: that agent
+    // gets its own project, and nothing of Verna's goes to it.
+    let elsewhere = Pane { pane_id: "w1:p9".into(), agent: "claude".into(), agent_session: "other".into(), status: "idle".into(), cwd: "/work/other".into(), title: "Other".into(), ..Default::default() };
+    let mut ws = t.ws(&w.machine, vec![elsewhere.clone()]).await;
     quiet(&mut ws).await;
     assert_eq!(domain::project(&t.app, &w.pid).await.unwrap().state, "needs_rebind");
     assert_eq!(t.stage(&a).await, "approved");
+    let auto: Vec<(String, String)> = sqlx::query_as("SELECT handle, pane_id FROM projects WHERE owner_id=$1 ORDER BY created_at").bind(&w.dev.account).fetch_all(&t.app.db).await.unwrap();
+    assert_eq!(auto, [("verna", "w1:p1"), ("other", "w1:p9")].map(|(h, p)| (h.to_string(), p.to_string())));
 
-    // Same pane id, different agent session: still no delivery.
-    send(&mut ws, DaemonFrame::Panes { panes: vec![pane("w1:p1", "s2-new", "idle")] }).await;
-    quiet(&mut ws).await;
-    assert_eq!(t.stage(&a).await, "approved");
-
-    // The dashboard lists the project with its queue; the project page offers the new pane.
+    // The dashboard lists the project with its queue; the project page offers the running agents.
     let dash = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
     assert!(dash.contains("Agents gone") && dash.contains("2 queued"), "dashboard");
     let page = t.http.get(format!("{}/projects/{}", t.base, w.pid)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
-    assert!(page.contains("Move here") && page.contains("same folder"), "project page");
+    assert!(page.contains("Move here"), "project page");
     assert_eq!(t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "gone"})).await["isError"], true);
 
-    // The developer moves it from the web; delivery resumes, in order, one at a time.
-    let mid: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
-    let r = t.form(&w.dev, &format!("/projects/{}/bind", w.pid), &[("machine_id", mid.as_str()), ("pane_id", "w1:p1")]).await;
-    let st = r.status(); assert_eq!(st, 303, "{}", r.text().await.unwrap());
+    // Claude restarts in Verna's folder, in a new pane: the project follows it,
+    // and delivery resumes in order, one at a time.
+    send(&mut ws, DaemonFrame::Panes { panes: vec![elsewhere.clone(), pane("w1:p3", "s2-new", "idle")] }).await;
     let (d1, m1, _, r1) = deliver(&mut ws).await;
     assert_eq!(m1, a, "oldest first");
     send(&mut ws, DaemonFrame::Ack { delivery_id: d1.clone(), stage: AckStage::Submitted, detail: String::new() }).await;
@@ -418,8 +421,23 @@ async fn offline_rebind_busy_and_restart() {
     // blocking the project's queue forever.
     let held = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "held by the old pane"})).await["structuredContent"]["message_id"].as_str().unwrap().to_string();
     sqlx::query("UPDATE messages SET stage='submitted' WHERE id=$1").bind(&held).execute(&t.app.db).await.unwrap();
-    t.relay_api(&w.machine, "POST", "/relay/api/projects/verna/bind", json!({"pane_id": "w1:p1", "agent_session": "s2-new", "agent": "claude", "cwd": "/work/verna"})).await;
+    let mid: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
+    let r = t.form(&w.dev, &format!("/projects/{}/bind", w.pid), &[("machine_id", mid.as_str()), ("pane_id", "w1:p3")]).await;
+    assert_eq!(r.status(), 303);
     assert_eq!(t.stage(&held).await, "interrupted");
+    // Restarting the agent in the same pane keeps the project too.
+    // b was sent but never acknowledged: the moved project delivers it again,
+    // and so does the restarted session.
+    assert_eq!(deliver(&mut ws).await.1, b);
+    send(&mut ws, DaemonFrame::Panes { panes: vec![elsewhere, pane("w1:p3", "s3", "idle")] }).await;
+    assert_eq!(deliver(&mut ws).await.1, b);
+    let p = domain::project(&t.app, &w.pid).await.unwrap();
+    assert_eq!((p.pane_id.as_str(), p.agent_session.as_str()), ("w1:p3", "s3"));
+
+    // Deleting a project whose agent still runs: the agent gets a fresh one.
+    let other: String = sqlx::query_scalar("SELECT id FROM projects WHERE handle='other'").fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(t.form(&w.dev, &format!("/projects/{other}/delete"), &[]).await.status(), 303);
+    assert!(sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE id=$1").bind(&other).fetch_optional(&t.app.db).await.unwrap().is_none());
 }
 
 #[tokio::test]

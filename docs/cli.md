@@ -16,15 +16,7 @@ The installer downloads the build for your Mac, checks its SHA-256 and copies it
    ```sh
    substrate login
    ```
-2. List the agents that Herdr runs.
-   ```sh
-   substrate herdr discover
-   ```
-3. Create a project and bind it to one pane.
-   ```sh
-   substrate project add verna --pane w9P:p1
-   ```
-4. Install the relay as a background service. It starts at login and restarts after a crash.
+2. Install the relay as a background service. It starts at login and restarts after a crash.
    ```sh
    substrate daemon install
    ```
@@ -49,7 +41,7 @@ Invite testers from the project page on https://substrate.gliph.sh.
 | `daemon run` | Runs the relay in the foreground. launchd uses this command. |
 | `herdr discover` | Lists Herdr's agents: pane, kind, status, title and directory. |
 | `projects` | Lists your projects with pane, state, relay mode and pending count. |
-| `project add <handle> --pane <id> [--name]` | Creates a project and binds it to a pane on this computer. |
+| `project add <handle> --pane <id> [--name]` | Creates a project with a handle you pick. The relay already makes one for every agent pane, named after the pane. |
 | `project bind <handle> <pane>` | Binds a project to a pane, or moves it. Only this command changes the target. |
 | `project unbind <handle>` | Removes the binding. Messages stay in the queue. |
 | `project icon <handle> [--file PATH]` | Finds the project's logo again, or uploads the PNG or JPEG you give. |

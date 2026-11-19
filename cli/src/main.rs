@@ -235,7 +235,7 @@ async fn run() -> Result<()> {
             });
             let c = api.pair(&name).await?;
             println!("Paired {name} ({}). Your credentials are in the {}.", c.machine_id, api.store().backend());
-            println!("Next:\n  substrate herdr discover\n  substrate project add <handle> --pane <id>\n  substrate daemon install");
+            println!("Next:\n  substrate daemon install   # each agent in Herdr gets a project");
         }
         Cmd::Logout => {
             let _ = api.call("POST", "/relay/api/logout", None).await;
