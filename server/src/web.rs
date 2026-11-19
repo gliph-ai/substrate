@@ -1071,8 +1071,12 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                         // A decision by the developer shows their face; the rest is Substrate.
                         @if matches!(stage, "approved" | "rejected" | "cancelled") && !e.data["by"].as_str().unwrap_or("").is_empty() {
                             img.ev-av src=(format!("/accounts/{}/avatar", p.owner_id)) alt=""; span style="font-weight:500" { (e.data["by"].as_str().unwrap_or("")) }
-                        } @else { span.ev-av.mark { (orb("")) } span style="font-weight:500" { "Substrate" } }
-                        @if !stage.is_empty() { (stage_tag(stage)) } } span.time { (hhmm(&e.created_at)) } }
+                            // A decision reads as one: approved in green, rejected or cancelled in red.
+                            @match stage { "approved" => span.tag.ok { "approved" }, "rejected" => span.tag.bad { "rejected" }, _ => span.tag.bad { "cancelled" } }
+                        } @else {
+                            span.ev-av.mark { (orb("")) } span style="font-weight:500" { "Substrate" }
+                            @if !stage.is_empty() { (stage_tag(stage)) }
+                        } } span.time { (hhmm(&e.created_at)) } }
                     div.body style="color:var(--text-2)" { (text) }
                     @if attention { @if let Some(m) = m {
                         @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
@@ -1671,6 +1675,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
     let ms: Vec<(String, String, String, String, Option<DateTime<Utc>>, serde_json::Value)> = sqlx::query_as(
         "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
     ).bind(&a.id).fetch_all(&app.db).await?;
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
             h1 { "Machines" }
@@ -1689,9 +1694,22 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                                 }
                             }
                             span.r.row {
-                                span.faint style="font-size:13px" {
-                                    @if app.machine_online(mid) { (list.len()) @if list.len() == 1 { " agent" } @else { " agents" } @if working > 0 { " · " (working) " working" } }
-                                    @else if let Some(s) = seen { "last seen " (ago_text(s)) } @else { "never connected" }
+                                @if app.machine_online(mid) {
+                                    // Each agent: its project's icon with the agent's mark; working ones move.
+                                    span.agents-strip aria-label=(format!("{} agents, {} working", list.len(), working)) {
+                                        @for pn in &list {
+                                            @let pp = projects.iter().find(|p| &p.machine_id == mid && p.pane_id == pn["pane_id"].as_str().unwrap_or(""));
+                                            @let name = pp.map(|p| p.name.clone()).unwrap_or_else(|| pn["title"].as_str().unwrap_or("").to_string());
+                                            @let st = match pn["status"].as_str().unwrap_or("") { "working" => "working", "blocked" => "blocked", _ => "free" };
+                                            @let agent = pn["agent"].as_str().unwrap_or("");
+                                            span.mini data-tip=(format!("{name} · {st}")) {
+                                                @match pp { Some(p) => (picon(&p.id, &p.name, &p.icon_etag, 26)), None => span.picon.tile style="width:26px;height:26px;font-size:11px" { (name.chars().next().unwrap_or('?')) } }
+                                                span class=(format!("agent-mark {st}{}", if agent.contains("claude") { " claude" } else { "" })) { (logo(agent_logo(agent), "")) }
+                                            }
+                                        }
+                                    }
+                                } @else {
+                                    span.faint style="font-size:13px" { @if let Some(s) = seen { "last seen " (ago_text(s)) } @else { "never connected" } }
                                 }
                                 span.chev { (ic("arrow-right")) }
                             }

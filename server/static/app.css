@@ -376,3 +376,11 @@ a.me { text-decoration: none; gap: 8px; }
 .ev-line .deploy { margin-left: 30px; }
 .timeline { gap: 8px; }
 .deploy-track.card { padding: 12px 16px; font-size: 13px; gap: 10px; }
+
+/* Machines list: one icon per agent, the agent's mark on its corner, a tip on hover. */
+.agents-strip { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 520px; }
+.agents-strip .mini { position: relative; display: inline-flex; }
+.agents-strip .mini .agent-mark { position: absolute; right: -5px; bottom: -5px; width: 15px; height: 15px; border-radius: 50%; background: var(--card); }
+.agents-strip .mini .agent-mark img { width: 11px; height: 11px; }
+.agents-strip .mini[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); white-space: nowrap;
+  padding: 5px 9px; border-radius: 8px; background: #1C1D22; color: var(--text); font-size: 12px; box-shadow: 0 6px 20px #000a, 0 0 0 1px #8F7BFF44; z-index: 5; pointer-events: none; }
