@@ -390,7 +390,7 @@ fn landing() -> Html<String> {
             div.card {
                 h3 { "Give a tester access" }
                 span.muted { "Create an access link for the panes they may reach, with the permissions you pick. They paste it into Claude or ChatGPT as a custom connector. They need no account." }
-                div.row { a.btn href="/links" { (ic("link")) "Create an access link" } }
+                div.row { a.btn href="/links/new" { (ic("link")) "Create an access link" } }
             }
             div.card {
                 h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
@@ -485,7 +485,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         div.stack style="padding:12px 0 48px" {
             div.between style="padding:8px 4px 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
-                div.row { a.btn.primary href="/links" { (ic("link")) "New access link" } }
+                div.row { a.btn.primary href="/links/new" { (ic("link")) "New access link" } }
             }
             @if !approvals.is_empty() {
                 div.card.glow {

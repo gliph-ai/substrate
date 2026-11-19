@@ -129,6 +129,7 @@ pub fn router(app: App) -> Router {
         .route("/chat", get(chat::page))
         .route("/chat/rpc", post(chat::rpc))
         .route("/links", get(links::page).post(links::create_post))
+        .route("/links/new", get(links::new_page))
         .route("/links/{lid}/revoke", post(links::revoke_post))
         .route("/.well-known/oauth-protected-resource", get(oauth::protected_resource))
         .route("/.well-known/oauth-protected-resource/mcp", get(oauth::protected_resource))

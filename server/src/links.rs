@@ -145,65 +145,21 @@ struct LinkRow {
 }
 
 pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
-    render(&app, &a, q.get("flash").map(String::as_str), None).await
-}
-
-/// The page; `new` is (label, secret) right after a link was made, shown once
-/// and never put in a URL.
-async fn render(app: &AppInner, a: &crate::auth::Account, flash: Option<&str>, new: Option<(&str, &str)>) -> Result<Response, Fail> {
-    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
     let links = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
          FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
          WHERE l.owner_id=$1 AND NOT l.revoked AND l.expires_at > now() GROUP BY l.id ORDER BY l.created_at DESC",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    let new_url = new.map(|(_, s)| format!("{}/mcp/{s}", app.cfg.public_url));
-    Ok(Html(layout("Access links", Some(a), None, html! {
+    Ok(Html(layout("Access links", Some(&a), None, html! {
         div.narrow.stack style="padding:16px 0 48px" {
-            @if let Some(msg) = flash { div.flash role="status" { (msg) } }
-            h1 { "Access " span.grad { "links" } }
+            @if let Some(msg) = q.get("flash") { div.flash role="status" { (msg) } }
+            div.between { h1 { "Access " span.grad { "links" } } a.btn.primary href="/links/new" { (ic("link")) "New link" } }
             p.lead { "Give each person one link. They open it in a browser to chat, or add it to Claude or ChatGPT as a connector." }
-            @if let Some(u) = &new_url {
-                div.card.glow {
-                    h3 { "Send this link to " (new.map(|(l, _)| l).unwrap_or("your tester")) }
-                    div.secret { (u) }
-                    div.row { button.btn.primary type="button" data-copy=(u) { (ic("copy")) "Copy link" } span.faint style="font-size:13px" { "You see it only once." } }
-                    p.muted style="margin:0;font-size:14px" { "Opened in a browser, the link is a chat with your agents." }
-                    div.stack style="gap:8px;font-size:14px" {
-                        div.row.muted { img.logo src="/static/logos/claude.svg" alt="Claude" width="18" height="18"; span { strong style="color:var(--text)" { "Claude" } " · Settings › Connectors › Add custom connector. Paste the link, leave authentication off." } }
-                        div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } " · Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
-                    }
-                }
-            }
-            @if projects.is_empty() {
-                div.card { h3 { "Add a project first" } p.muted { "A link gives access to projects. Install the relay: each agent in Herdr gets a project." } }
+            @if links.is_empty() {
+                div.card { h3 { "No links yet" } p.muted { "Create a link for each tester, with the projects and permissions they get." } }
             } @else {
-                form.card.stack method="post" action="/links" {
-                    (csrf(a))
-                    h3 { "New link" }
-                    div.field { label for="ll" { "Person or team" } input id="ll" type="text" name="label" required maxlength="64" placeholder="Sarah, or Design team"; }
-                    div.field {
-                        label { "Panes" }
-                        @for p in &projects {
-                            label.row style="font-weight:400" { input type="checkbox" name=(format!("p_{}", p.id)); (picon(&p.id, &p.name, &p.icon_etag, 22)) (p.name) span.muted.mono { (p.handle) } }
-                        }
-                    }
-                    div.field {
-                        label { "Permissions" }
-                        label.row style="font-weight:400" { input type="checkbox" checked disabled; "Send messages and answers" }
-                        label.row style="font-weight:400" { input type="checkbox" name="read" checked; "Read the agent's replies and questions" }
-                        label.row style="font-weight:400" { input type="checkbox" name="deploys" checked; "See CI and deploy progress and retest links" }
-                        label.row style="font-weight:400" { input type="checkbox" name="files" checked; "Attach files and download the agent's files" }
-                        label.row style="font-weight:400" { input type="checkbox" name="auto"; "Skip my approval (flagged messages still wait)" }
-                    }
-                    div.field { label for="ld" { "Expires" } select id="ld" name="days" { option value="7" { "in 7 days" } option value="30" selected { "in 30 days" } option value="90" { "in 90 days" } option value="365" { "in a year" } } }
-                    div.row { button.btn.primary type="submit" { (ic("link")) "Create link" } }
-                }
-            }
-            @if !links.is_empty() {
                 div.list {
-                    div.label { "Active links" }
                     @for l in &links {
                         div.item {
                             span.l.stack style="gap:4px;align-items:flex-start" {
@@ -222,7 +178,7 @@ async fn render(app: &AppInner, a: &crate::auth::Account, flash: Option<&str>, n
                                     " · expires " (l.expires_at.format("%b %d"))
                                 }
                                 form.inline method="post" action=(format!("/links/{}/revoke", l.id)) data-confirm="Revoke this link? It stops working at once." {
-                                    (csrf(a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" }
+                                    (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" }
                                 }
                             }
                         }
@@ -233,6 +189,62 @@ async fn render(app: &AppInner, a: &crate::auth::Account, flash: Option<&str>, n
     }).into_string()).into_response())
 }
 
+pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
+    Ok(Html(layout("New access link", Some(&a), None, html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            @if let Some(msg) = q.get("flash") { div.flash role="status" { (msg) } }
+            div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { "New link" } }
+            h1 { "New link" }
+            @if projects.is_empty() {
+                div.card { h3 { "Add a project first" } p.muted { "A link gives access to projects. Install the relay: each agent in Herdr gets a project." } }
+            } @else {
+                form.card.stack method="post" action="/links" {
+                    (csrf(&a))
+                    div.field { label for="ll" { "Person or team" } input id="ll" type="text" name="label" required maxlength="64" placeholder="Sarah, or Design team"; }
+                    div.field {
+                        label { "Projects" }
+                        @for p in &projects {
+                            label.row style="font-weight:400" { input type="checkbox" name=(format!("p_{}", p.id)); (picon(&p.id, &p.name, &p.icon_etag, 22)) (p.name) span.muted.mono { (p.handle) } }
+                        }
+                    }
+                    div.field {
+                        label { "Permissions" }
+                        label.row style="font-weight:400" { input type="checkbox" checked disabled; "Send messages and answers" }
+                        label.row style="font-weight:400" { input type="checkbox" name="read" checked; "Read the agent's replies and questions" }
+                        label.row style="font-weight:400" { input type="checkbox" name="deploys" checked; "See CI and deploy progress and retest links" }
+                        label.row style="font-weight:400" { input type="checkbox" name="files" checked; "Attach files and download the agent's files" }
+                        label.row style="font-weight:400" { input type="checkbox" name="auto"; "Skip my approval (flagged messages still wait)" }
+                    }
+                    div.field { label for="ld" { "Expires" } select id="ld" name="days" { option value="7" { "in 7 days" } option value="30" selected { "in 30 days" } option value="90" { "in 90 days" } option value="365" { "in a year" } } }
+                    div.row { button.btn.primary type="submit" { (ic("link")) "Create link" } a.btn.tertiary href="/links" { "Cancel" } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+/// Shown once, right after the link is made; the secret never goes in a URL.
+fn created(app: &AppInner, a: &crate::auth::Account, label: &str, secret: &str) -> Response {
+    let u = format!("{}/mcp/{secret}", app.cfg.public_url);
+    Html(layout("Link created", Some(a), None, html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { (label) } }
+            div.card.glow {
+                h3 { "Send this link to " (label) }
+                div.secret { (u) }
+                div.row { button.btn.primary type="button" data-copy=(u) { (ic("copy")) "Copy link" } span.faint style="font-size:13px" { "You see it only once." } }
+                div.stack style="gap:8px;font-size:14px" {
+                    div.row.muted { (ic("link")) span { strong style="color:var(--text)" { "Browser" } " · Open the link for a chat with your agents." } }
+                    div.row.muted { img.logo src="/static/logos/claude.svg" alt="Claude" width="18" height="18"; span { strong style="color:var(--text)" { "Claude" } " · Settings › Connectors › Add custom connector. Paste the link, leave authentication off." } }
+                    div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } " · Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
+                }
+            }
+            div.row { a.btn href="/links" { (ic("arrow-left")) "All links" } }
+        }
+    }).into_string()).into_response()
+}
+
 pub async fn create_post(State(app): State<App>, headers: HeaderMap, User(a): User, Form(f): Form<HashMap<String, String>>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, f.get("csrf").map(String::as_str).unwrap_or(""))?;
     let projects: Vec<String> = f.keys().filter_map(|k| k.strip_prefix("p_")).map(str::to_string).collect();
@@ -240,8 +252,8 @@ pub async fn create_post(State(app): State<App>, headers: HeaderMap, User(a): Us
     let days = f.get("days").and_then(|d| d.parse().ok()).unwrap_or(30);
     let label = f.get("label").cloned().unwrap_or_default();
     match create(&app, &a.id, &label, &projects, Perms { read: on("read"), deploys: on("deploys"), files: on("files") }, on("auto"), days).await {
-        Ok((_, secret)) => render(&app, &a, None, Some((label.trim(), &secret))).await,
-        Err(Fail(_, msg)) => Ok(Redirect::to(&format!("/links?flash={}", urlencoding::encode(&msg))).into_response()),
+        Ok((_, secret)) => Ok(created(&app, &a, label.trim(), &secret)),
+        Err(Fail(_, msg)) => Ok(Redirect::to(&format!("/links/new?flash={}", urlencoding::encode(&msg))).into_response()),
     }
 }
 
