@@ -1,0 +1,63 @@
+# Every push is tested; main deploys to Pushleft (org empire, project substrate)
+# from .pl.yaml. Needs the repository secret PUSHLEFT_TOKEN (an empire service
+# token; it names its org, so `pl` gets no --org).
+name: ci
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      SUBSTRATE_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-
+      - run: rustup component add clippy
+      - run: cargo clippy --all-targets -- -D warnings
+      # The relay tests use a fake herdr; the server suite needs only Postgres.
+      - run: cargo test -p substrate-proto -p substrate-server
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # One deploy at a time, and a newer push cancels a waiting older one, so an
+    # older run never rolls production back.
+    concurrency:
+      group: substrate-prod
+      cancel-in-progress: true
+    environment:
+      name: prod
+      url: https://substrate.gliph.sh
+    env:
+      PL_VERSION: 0.1.0-6e5dc8d
+      PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
+      PUSHLEFT_TOKEN: ${{ secrets.PUSHLEFT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Only the tip of main deploys
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" != "$GITHUB_SHA" ]; then echo "main is at $tip; not deploying $GITHUB_SHA"; echo "SKIP=1" >> "$GITHUB_ENV"; fi
+      - if: env.SKIP != '1'
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
+          echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
+          sudo chmod +x /usr/local/bin/pl
+          pl up --production
+          curl -fsS https://substrate.gliph.sh/healthz

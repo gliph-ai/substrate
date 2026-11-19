@@ -18,7 +18,7 @@ Run one web instance only. The relay hub and the long-poll wakeups are in proces
 
 ## Deploy
 
-Push to `main` on https://git.erip.me/gliph/substrate. `.gitlab-ci.yml` runs clippy and the tests, then deploys with the CI variable `PUSHLEFT_TOKEN`. CI deploys only the commit at the tip of `main`.
+Push to `main` on https://github.com/gliph-ai/substrate. `.github/workflows/ci.yml` runs clippy and the tests, then deploys with the repository secret `PUSHLEFT_TOKEN`. CI deploys only the commit at the tip of `main`.
 
 To deploy by hand:
 

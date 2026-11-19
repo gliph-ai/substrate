@@ -30,7 +30,7 @@ Each end-to-end test creates a new database (`SUBSTRATE_TEST_PG`, default `postg
 
 ## Ship
 
-- **Server:** push to `main` on https://git.erip.me/gliph/substrate. GitLab CI runs the tests, then `pl up --production` (Pushleft project `substrate`, `.pl.yaml`). Refer to `docs/operations.md`.
+- **Server:** push to `main` on https://github.com/gliph-ai/substrate. GitHub Actions runs the tests, then `pl up --production` (Pushleft project `substrate`, `.pl.yaml`). Refer to `docs/operations.md`.
 - **Relay:** run `cli/release.sh`. It builds both Mac architectures and puts them in the bucket behind `/install`.
 
 ## Docs
