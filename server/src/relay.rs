@@ -175,7 +175,7 @@ pub async fn ws(State(app): State<App>, headers: HeaderMap, upgrade: WebSocketUp
 
 async fn bindings(app: &AppInner, machine: &str) -> Result<Vec<Binding>, Fail> {
     let ps = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE machine_id=$1 AND pane_id<>''").bind(machine).fetch_all(&app.db).await?;
-    Ok(ps.into_iter().map(|p| Binding { has_icon: !p.icon_etag.is_empty(), project_id: p.id, handle: p.handle, pane_id: p.pane_id, agent_session: p.agent_session, cwd: p.cwd }).collect())
+    Ok(ps.into_iter().map(|p| Binding { has_icon: !p.icon_etag.is_empty(), has_description: !p.description.is_empty(), project_id: p.id, handle: p.handle, pane_id: p.pane_id, agent_session: p.agent_session, cwd: p.cwd }).collect())
 }
 
 pub async fn push_bindings(app: &AppInner, machine: &str) -> Result<(), Fail> {
@@ -578,6 +578,20 @@ pub struct AddProject {
 pub fn valid_handle(h: &str) -> bool {
     !h.is_empty() && h.len() <= 32 && h.chars().next().unwrap().is_ascii_lowercase()
         && h.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[derive(Deserialize)]
+pub struct DescriptionReq {
+    text: String,
+}
+
+/// The relay fills an empty project description from the README; it never overwrites one.
+pub async fn api_description(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>, Json(d): Json<DescriptionReq>) -> Result<Json<Value>, Fail> {
+    let (account, machine) = machine_auth(&app, &headers).await?;
+    let p = owned_by_handle(&app, &account, &handle).await?;
+    sqlx::query("UPDATE projects SET description=$2 WHERE id=$1 AND description=''").bind(&p.id).bind(proto::sanitize(d.text.trim(), 500)).execute(&app.db).await?;
+    push_bindings(&app, &machine).await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 pub async fn api_projects(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Fail> {

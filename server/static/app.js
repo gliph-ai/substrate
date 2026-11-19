@@ -361,8 +361,10 @@ document.addEventListener("submit", (e) => {
     const log = $("chat-log"), e = el("div", "chat-empty");
     const p = project(), big = p ? icon(p) : null;
     if (big) { big.style.width = big.style.height = "64px"; big.style.fontSize = "28px"; big.style.borderRadius = "18px"; e.append(big); }
-    e.append(el("h2", null, p ? "Talk to " + dev() + "'s " + (p.agent || "agent") + " on " + p.name + "." : "Talk to the developer's agent."),
-      el("p", "muted", "Report a bug, ask a question or request a change. " + dev().charAt(0).toUpperCase() + dev().slice(1) + " sees every message."));
+    // About the project: its icon, its name, and what the developer wrote for testers.
+    e.append(el("h2", null, p ? "About " + p.name : "Talk to the developer's agent."));
+    if (p && p.description) e.append(el("p", "about", p.description));
+    e.append(el("p", "muted", "Report a bug, ask a question or request a change. " + dev() + " sees every message."));
     log.replaceChildren(e);
     sidebar(); head(); $("chat-text").focus();
   }

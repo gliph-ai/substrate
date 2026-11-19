@@ -160,6 +160,7 @@ pub fn router(app: App) -> Router {
         .route("/relay/api/projects", get(relay::api_projects))
         .route("/relay/api/projects/{handle}/mode", post(relay::api_mode))
         .route("/relay/api/projects/{handle}/icon", post(relay::api_icon))
+        .route("/relay/api/projects/{handle}/description", post(relay::api_description))
         .route("/relay/api/approvals", get(relay::api_approvals))
         .route("/relay/api/inbox", get(relay::api_inbox))
         .route("/relay/api/messages/{mid}/{action}", post(relay::api_decide))

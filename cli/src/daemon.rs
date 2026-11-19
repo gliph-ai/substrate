@@ -521,14 +521,20 @@ pub async fn run(relay: Arc<Relay>, api: Arc<crate::api::Api>) -> Result<()> {
     tokio::spawn(async move {
         let mut tried = std::collections::HashSet::new();
         loop {
-            let todo: Vec<(String, String)> = r2.inner.lock().unwrap().bindings.values()
-                .filter(|b| !b.has_icon && !tried.contains(&b.project_id)).map(|b| (b.project_id.clone(), b.handle.clone())).collect();
-            for (pid, handle) in todo {
-                tried.insert(pid.clone());
-                let cwd = r2.inner.lock().unwrap().bindings.get(&pid).map(|b| b.cwd.clone()).unwrap_or_default();
-                if let Some(bytes) = crate::icon::detect(&cwd) {
-                    if let Err(e) = a2.icon(&handle, bytes).await {
-                        log(&r2.paths, "warn", "icon upload failed", json!({"project": handle, "error": e.to_string()}));
+            let todo: Vec<Binding> = r2.inner.lock().unwrap().bindings.values()
+                .filter(|b| (!b.has_icon || !b.has_description) && !tried.contains(&b.project_id)).cloned().collect();
+            for b in todo {
+                tried.insert(b.project_id.clone());
+                if !b.has_icon {
+                    if let Some(bytes) = crate::icon::detect(&b.cwd) {
+                        if let Err(e) = a2.icon(&b.handle, bytes).await {
+                            log(&r2.paths, "warn", "icon upload failed", json!({"project": b.handle, "error": e.to_string()}));
+                        }
+                    }
+                }
+                if !b.has_description {
+                    if let Some(text) = crate::icon::readme_summary(&b.cwd) {
+                        let _ = a2.call("POST", &format!("/relay/api/projects/{}/description", b.handle), Some(json!({"text": text}))).await;
                     }
                 }
             }

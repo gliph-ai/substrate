@@ -43,8 +43,49 @@ pub fn detect(folder: &str) -> Option<Vec<u8>> {
     (png || jpeg).then_some(b)
 }
 
+/// The README's first paragraph of prose, as plain text: what testers read about
+/// the project. Headings, badges, images, HTML and code are skipped.
+pub fn readme_summary(folder: &str) -> Option<String> {
+    let root = std::path::Path::new(folder);
+    let text = ["README.md", "readme.md", "Readme.md", "README"].iter().find_map(|f| std::fs::read_to_string(root.join(f)).ok())?;
+    let mut para = Vec::new();
+    let (mut fence, mut html) = (false, false);
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with("```") { fence = !fence; continue; }
+        if fence { continue; }
+        // An HTML block (a centred logo, badges) runs to the next blank line.
+        if l.starts_with('<') { html = true; }
+        if html { if l.is_empty() { html = false; } continue; }
+        let skip = l.starts_with('#') || l.starts_with('<') || l.starts_with("![") || l.starts_with("[![") || l.starts_with('|') || l.starts_with("---") || l.starts_with('>');
+        if l.is_empty() || skip {
+            if !para.is_empty() { break; }
+            continue;
+        }
+        para.push(l.to_string());
+    }
+    let mut s = para.join(" ");
+    // [text](url) -> text; drop emphasis and inline code marks.
+    while let (Some(a), Some(m)) = (s.find('['), s.find("](")) {
+        let Some(e) = s[m..].find(')').map(|e| m + e) else { break };
+        if a > m { break; }
+        s = format!("{}{}{}", &s[..a], &s[a + 1..m], &s[e + 1..]);
+    }
+    let s: String = s.replace("**", "").replace('`', "").replace("__", "");
+    let s = s.trim().to_string();
+    if s.len() < 12 { return None; }
+    Some(if s.chars().count() > 480 { format!("{}…", s.chars().take(480).collect::<String>().trim_end()) } else { s })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn readme_first_paragraph() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "<p align=\"center\">\n  <img\n    src=\"logo.png\">\n</p>\n\n# Messy\n\n[![ci](x)](y)\n\nMessy sends **email**, SMS and [WhatsApp](https://x) from one API.\nIt runs on Rails.\n\n## Setup\n").unwrap();
+        assert_eq!(super::readme_summary(dir.path().to_str().unwrap()).unwrap(), "Messy sends email, SMS and WhatsApp from one API. It runs on Rails.");
+    }
+
     use super::*;
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82";

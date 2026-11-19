@@ -45,6 +45,10 @@ pub struct Binding {
     /// False until the project has a logo: the relay then looks for one in `cwd`.
     #[serde(default)]
     pub has_icon: bool,
+    /// False until the project has a description for testers: the relay then takes
+    /// the first paragraph of the README in `cwd`.
+    #[serde(default)]
+    pub has_description: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

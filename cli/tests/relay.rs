@@ -89,7 +89,7 @@ fn reopen(dir: tempfile::TempDir, paths: Paths, herdr: Arc<FakeHerdr>) -> H {
 
 fn bind(h: &H, projects: &[(&str, &str, &str)]) {
     h.relay.on_frame(CloudFrame::Welcome { machine_id: "mc".into(), projects: projects.iter().map(|(pid, pane, sess)| Binding {
-        project_id: (*pid).into(), handle: pid.to_string(), pane_id: (*pane).into(), agent_session: (*sess).into(), cwd: "/w".into(), has_icon: true }).collect() });
+        project_id: (*pid).into(), handle: pid.to_string(), pane_id: (*pane).into(), agent_session: (*sess).into(), cwd: "/w".into(), has_icon: true, has_description: true }).collect() });
 }
 
 fn deliver(h: &H, mid: &str, pid: &str, env: &str, atts: Vec<AttachmentRef>) {
@@ -296,7 +296,7 @@ async fn reconnect_over_a_real_socket() {
             let mut ws = tokio_tungstenite::accept_async(s).await.unwrap();
             let hello = ws.next().await.unwrap().unwrap();
             assert!(hello.to_text().unwrap().contains("\"t\":\"hello\""));
-            let welcome = CloudFrame::Welcome { machine_id: "mc".into(), projects: vec![Binding { project_id: "p1".into(), handle: "p1".into(), pane_id: "w1:p1".into(), agent_session: "s1".into(), cwd: "/w".into(), has_icon: true }] };
+            let welcome = CloudFrame::Welcome { machine_id: "mc".into(), projects: vec![Binding { project_id: "p1".into(), handle: "p1".into(), pane_id: "w1:p1".into(), agent_session: "s1".into(), cwd: "/w".into(), has_icon: true, has_description: true }] };
             ws.send(serde_json::to_string(&welcome).unwrap().into()).await.unwrap();
             if round == 0 {
                 let d = CloudFrame::Deliver { delivery_id: "d1".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt".into(), attachments: vec![], deploy: "none".into() };
