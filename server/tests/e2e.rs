@@ -569,6 +569,18 @@ async fn access_link_scopes_projects_and_permissions() {
     let secret = page.split("/mcp/").nth(1).unwrap().split(['<', '"']).next().unwrap().to_string();
     assert_eq!(secret.len(), 64, "{secret}");
     let url = format!("{}/mcp/{secret}", t.base);
+    // The same link in a browser is the web chat; an MCP client's GET still gets 405.
+    let r = t.http.get(&url).header("accept", "text/html").send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.text().await.unwrap().contains(&format!("data-rpc=\"/mcp/{secret}\"")));
+    assert_eq!(t.http.get(&url).send().await.unwrap().status(), 405);
+    // Signed-in testers chat through /chat/rpc with their cookie and CSRF token.
+    let rpc = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_projects", "arguments": {}}});
+    let r: Value = t.http.post(format!("{}/chat/rpc", t.base)).header("cookie", &w.tester.cookie).header("origin", &t.base).header("x-csrf", &w.tester.csrf)
+        .json(&rpc).send().await.unwrap().json().await.unwrap();
+    assert_eq!(r["result"]["structuredContent"]["projects"].as_array().unwrap().len(), 1, "{r}");
+    let r = t.http.post(format!("{}/chat/rpc", t.base)).header("cookie", &w.tester.cookie).header("origin", &t.base).json(&rpc).send().await.unwrap();
+    assert_eq!(r.status(), 403, "no CSRF header");
     let call = |tool: &'static str, args: Value| {
         let (http, url) = (t.http.clone(), url.clone());
         async move {

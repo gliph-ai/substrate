@@ -156,12 +156,13 @@ async fn render(app: &AppInner, a: &crate::auth::Account, flash: Option<&str>, n
         div.narrow.stack style="padding:16px 0 48px" {
             @if let Some(msg) = flash { div.flash role="status" { (msg) } }
             h1 { "Access " span.grad { "links" } }
-            p.lead { "Give each person one link. They add it to Claude or ChatGPT as a connector and talk to the panes you pick." }
+            p.lead { "Give each person one link. They open it in a browser to chat, or add it to Claude or ChatGPT as a connector." }
             @if let Some(u) = &new_url {
                 div.card.glow {
                     h3 { "Send this link to " (new.map(|(l, _)| l).unwrap_or("your tester")) }
                     div.secret { (u) }
                     div.row { button.btn.primary type="button" data-copy=(u) { (ic("copy")) "Copy link" } span.faint style="font-size:13px" { "You see it only once." } }
+                    p.muted style="margin:0;font-size:14px" { "Opened in a browser, the link is a chat with your agents." }
                     p.muted style="margin:0;font-size:14px" {
                         "In Claude: Settings › Connectors › Add custom connector, paste the link, leave authentication off. "
                         "In ChatGPT: Settings › Apps › Advanced settings › Developer mode, then create an app with the link and no authentication."

@@ -110,7 +110,7 @@ pub async fn post_link(State(app): State<App>, Path(secret): Path<String>, heade
     serve(&app, &headers, &body, &account, &format!("access link: {label}"), Some(perms)).await
 }
 
-async fn serve(app: &AppInner, headers: &HeaderMap, body: &[u8], account: &str, client: &str, perms: Option<Perms>) -> Response {
+pub(crate) async fn serve(app: &AppInner, headers: &HeaderMap, body: &[u8], account: &str, client: &str, perms: Option<Perms>) -> Response {
     if let Some(o) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         // Browsers may call only from our own origin (DNS-rebinding guard);
         // assistant backends send no Origin.

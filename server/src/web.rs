@@ -102,6 +102,7 @@ pub(crate) fn ic(name: &str) -> Markup {
     let d = match name {
         "log-out" => r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#,
         "monitor-off" => r#"<path d="M17 17H4a2 2 0 0 1-2-2V5c0-1.5 1-2 1-2"/><path d="M22 15V5a2 2 0 0 0-2-2H9"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m2 2 20 20"/>"#,
+        "square-pen" => r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -128,7 +129,7 @@ pub(crate) fn ic(name: &str) -> Markup {
     maud::PreEscaped(format!(r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{d}</svg>"#))
 }
 
-fn orb(class: &str) -> Markup {
+pub(crate) fn orb(class: &str) -> Markup {
     html! {
         @if class == "xl" { span.orb-wrap aria-hidden="true" { span.orb.xl {} } }
         @else { span class=(format!("orb {class}")) aria-hidden="true" {} }
@@ -276,6 +277,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
                                     a href="/" { "Dashboard" }
+                                    a href="/chat" { "Chat" }
                                     a href="/links" { "Access links" }
                                     a href="/machines" { "Machines" }
                                     a href="/audit" { "Audit log" }

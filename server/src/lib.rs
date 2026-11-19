@@ -7,6 +7,7 @@ pub mod aws;
 pub mod domain;
 pub mod files;
 pub mod gliph;
+pub mod chat;
 pub mod links;
 pub mod mail;
 pub mod mcp;
@@ -124,7 +125,9 @@ pub fn router(app: App) -> Router {
         .route("/audit", get(web::audit_page))
         // MCP + OAuth
         .route("/mcp", get(mcp::get).post(mcp::post))
-        .route("/mcp/{secret}", get(mcp::get).post(mcp::post_link))
+        .route("/mcp/{secret}", get(chat::link_page).post(mcp::post_link))
+        .route("/chat", get(chat::page))
+        .route("/chat/rpc", post(chat::rpc))
         .route("/links", get(links::page).post(links::create_post))
         .route("/links/{lid}/revoke", post(links::revoke_post))
         .route("/.well-known/oauth-protected-resource", get(oauth::protected_resource))
