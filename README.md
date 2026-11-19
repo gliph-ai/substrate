@@ -30,7 +30,7 @@ The end-to-end suite creates a fresh database per test (`SUBSTRATE_TEST_PG`, def
 
 ## Ship
 
-- Server: `pl --org empire up --production` from the repo root (Pushleft project `substrate`, `.pl.yaml`). See `docs/operations.md`.
+- Server: push to `main` on https://git.erip.me/gliph/substrate; GitLab CI tests it and runs `pl --org empire up --production` (Pushleft project `substrate`, `.pl.yaml`). See `docs/operations.md`.
 - Relay: `cli/release.sh` builds both Mac architectures and publishes them to the bucket behind `/install`.
 
 ## Docs

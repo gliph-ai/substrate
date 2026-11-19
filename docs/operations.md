@@ -18,6 +18,8 @@ Keep one web instance: the relay hub and the long-poll wakeups live in process m
 
 ## Deploy
 
+Push to `main` on https://git.erip.me/gliph/substrate: `.gitlab-ci.yml` runs clippy and the tests, then deploys (CI variable `PUSHLEFT_TOKEN`). By hand:
+
 ```sh
 pl --org empire up --production      # from the repo root
 curl -s https://substrate.gliph.sh/healthz
