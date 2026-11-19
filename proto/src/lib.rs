@@ -42,6 +42,9 @@ pub struct Binding {
     pub pane_id: String,
     pub agent_session: String,
     pub cwd: String,
+    /// False until the project has a logo: the relay then looks for one in `cwd`.
+    #[serde(default)]
+    pub has_icon: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

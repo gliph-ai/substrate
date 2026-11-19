@@ -175,7 +175,7 @@ pub async fn ws(State(app): State<App>, headers: HeaderMap, upgrade: WebSocketUp
 
 async fn bindings(app: &AppInner, machine: &str) -> Result<Vec<Binding>, Fail> {
     let ps = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE machine_id=$1 AND pane_id<>''").bind(machine).fetch_all(&app.db).await?;
-    Ok(ps.into_iter().map(|p| Binding { project_id: p.id, handle: p.handle, pane_id: p.pane_id, agent_session: p.agent_session, cwd: p.cwd }).collect())
+    Ok(ps.into_iter().map(|p| Binding { has_icon: !p.icon_etag.is_empty(), project_id: p.id, handle: p.handle, pane_id: p.pane_id, agent_session: p.agent_session, cwd: p.cwd }).collect())
 }
 
 pub async fn push_bindings(app: &AppInner, machine: &str) -> Result<(), Fail> {
@@ -490,16 +490,16 @@ pub async fn attachment_download(State(app): State<App>, headers: HeaderMap, Pat
 
 #[derive(Deserialize)]
 pub struct AddProject {
-    handle: String,
+    pub handle: String,
     #[serde(default)]
-    name: String,
-    pane_id: String,
+    pub name: String,
+    pub pane_id: String,
     #[serde(default)]
-    agent_session: String,
+    pub agent_session: String,
     #[serde(default)]
-    agent: String,
+    pub agent: String,
     #[serde(default)]
-    cwd: String,
+    pub cwd: String,
 }
 
 pub fn valid_handle(h: &str) -> bool {
@@ -525,10 +525,17 @@ pub async fn api_add_project(State(app): State<App>, headers: HeaderMap, Json(a)
     if !valid_handle(&a.handle) {
         return Err(Fail::new(400, "a handle is lowercase letters, digits and -, starting with a letter, up to 32"));
     }
+    let pid = create_project(&app, &account, &machine, &a).await?;
+    Ok(Json(json!({"id": pid, "handle": a.handle})))
+}
+
+/// Create a project bound to a pane. The CLI (`project add`) and the
+/// Machines page (Add project) both come here.
+pub async fn create_project(app: &AppInner, account: &str, machine: &str, a: &AddProject) -> Result<String, Fail> {
     let name = if a.name.trim().is_empty() { a.handle.clone() } else { proto::sanitize(&a.name, 64) };
     let pid = id("p");
     let r = sqlx::query("INSERT INTO projects (id, owner_id, handle, name, machine_id, pane_id, agent_session, agent, cwd, state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown')")
-        .bind(&pid).bind(&account).bind(&a.handle).bind(&name).bind(&machine).bind(proto::sanitize(&a.pane_id, 64))
+        .bind(&pid).bind(account).bind(&a.handle).bind(&name).bind(machine).bind(proto::sanitize(&a.pane_id, 64))
         .bind(proto::sanitize(&a.agent_session, 128)).bind(proto::sanitize(&a.agent, 32)).bind(proto::sanitize(&a.cwd, 512))
         .execute(&app.db).await;
     if let Err(sqlx::Error::Database(e)) = &r {
@@ -537,10 +544,10 @@ pub async fn api_add_project(State(app): State<App>, headers: HeaderMap, Json(a)
         }
     }
     r?;
-    sqlx::query("INSERT INTO members (project_id, account_id, role) VALUES ($1,$2,'owner')").bind(&pid).bind(&account).execute(&app.db).await?;
-    audit(&app, &account, &pid, &a.handle, "project.created", &pid, &a.pane_id).await;
-    push_bindings(&app, &machine).await?;
-    Ok(Json(json!({"id": pid, "handle": a.handle})))
+    sqlx::query("INSERT INTO members (project_id, account_id, role) VALUES ($1,$2,'owner')").bind(&pid).bind(account).execute(&app.db).await?;
+    audit(app, account, &pid, &a.handle, "project.created", &pid, &a.pane_id).await;
+    push_bindings(app, machine).await?;
+    Ok(pid)
 }
 
 async fn owned_by_handle(app: &AppInner, account: &str, handle: &str) -> Result<Project, Fail> {

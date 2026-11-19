@@ -506,6 +506,26 @@ pub async fn run(relay: Arc<Relay>, api: Arc<crate::api::Api>) -> Result<()> {
     let ws_url = format!("{}/relay/ws", api.server.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
     let deploy = crate::deploy::Watcher::new(relay.paths.clone(), api.clone());
     tokio::spawn(async move { deploy.run().await });
+    // A project added from the web has no logo yet: find it in the bound
+    // folder, like `substrate project add` does. One try per project per run.
+    let (r2, a2) = (relay.clone(), api.clone());
+    tokio::spawn(async move {
+        let mut tried = std::collections::HashSet::new();
+        loop {
+            let todo: Vec<(String, String)> = r2.inner.lock().unwrap().bindings.values()
+                .filter(|b| !b.has_icon && !tried.contains(&b.project_id)).map(|b| (b.project_id.clone(), b.handle.clone())).collect();
+            for (pid, handle) in todo {
+                tried.insert(pid.clone());
+                let cwd = r2.inner.lock().unwrap().bindings.get(&pid).map(|b| b.cwd.clone()).unwrap_or_default();
+                if let Some(bytes) = crate::icon::detect(&cwd) {
+                    if let Err(e) = a2.icon(&handle, bytes).await {
+                        log(&r2.paths, "warn", "icon upload failed", json!({"project": handle, "error": e.to_string()}));
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    });
     let mut backoff = 1u64;
     loop {
         let started = Instant::now();

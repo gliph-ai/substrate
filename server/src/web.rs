@@ -1418,8 +1418,9 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                                         span.r { (status_tag(status)) }
                                     },
                                     None => div.item {
-                                        span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } span.faint { "no project" } }
-                                        span.r { (status_tag(status)) }
+                                        span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } }
+                                        span.r { (status_tag(status))
+                                            form.inline method="post" action=(format!("/machines/{mid}/projects")) { (csrf(&a)) input type="hidden" name="pane_id" value=(pid); button.btn.small type="submit" { (ic("plug")) "Add project" } } }
                                     },
                                 }
                             }
@@ -1444,6 +1445,47 @@ fn spaces(panes: &serde_json::Value) -> Vec<(String, Vec<&serde_json::Value>)> {
         }
     }
     out
+}
+
+#[derive(Deserialize)]
+pub struct PaneForm {
+    csrf: String,
+    pane_id: String,
+}
+
+/// Add project on the Machines page: a project for a pane the relay reported,
+/// named after the pane, with a handle made from that name.
+pub async fn machine_add_project(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<PaneForm>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    let panes: serde_json::Value = sqlx::query_scalar("SELECT panes FROM machines WHERE id=$1 AND account_id=$2 AND NOT revoked")
+        .bind(&mid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such computer"))?;
+    let pn = panes.as_array().into_iter().flatten().find(|p| p["pane_id"] == f.pane_id.as_str()).ok_or_else(|| Fail::new(404, "that pane is gone"))?;
+    let s = |k: &str| pn[k].as_str().unwrap_or("").to_string();
+    let cwd = s("cwd");
+    let name = if s("title").is_empty() { cwd.rsplit('/').next().unwrap_or("").to_string() } else { s("title") };
+    let base = handle_from(&name);
+    let mut last = Fail::new(409, "no free handle");
+    for n in 1..10 {
+        let handle = if n == 1 { base.clone() } else { format!("{}-{n}", &base[..base.len().min(29)]) };
+        let add = crate::relay::AddProject { handle, name: name.clone(), pane_id: f.pane_id.clone(), agent_session: s("agent_session"), agent: s("agent"), cwd: cwd.clone() };
+        match crate::relay::create_project(&app, &a.id, &mid, &add).await {
+            Ok(pid) => return Ok(Redirect::to(&format!("/projects/{pid}")).into_response()),
+            Err(e) if e.0.as_u16() == 409 => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+/// "Minhaj_nl" -> "minhaj-nl": lowercase letters, digits and -, a letter first, up to 32.
+fn handle_from(name: &str) -> String {
+    let mut h: String = name.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    h = h.split('-').filter(|x| !x.is_empty()).collect::<Vec<_>>().join("-");
+    if !h.starts_with(|c: char| c.is_ascii_lowercase()) {
+        h = format!("p-{h}");
+    }
+    h.truncate(32);
+    h.trim_end_matches('-').to_string()
 }
 
 pub async fn machine_revoke(State(app): State<App>, headers: HeaderMap, User(a): User, Path(mid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
@@ -1495,3 +1537,14 @@ pub fn not_found() -> Html<String> {
     error_page("Not found", "There's nothing at this address.")
 }
 
+
+#[cfg(test)]
+mod handle_tests {
+    #[test]
+    fn handle_from_pane_names() {
+        assert_eq!(super::handle_from("Minhaj_nl"), "minhaj-nl");
+        assert_eq!(super::handle_from("Gliph Substrate"), "gliph-substrate");
+        assert_eq!(super::handle_from("2fa app"), "p-2fa-app");
+        assert!(crate::relay::valid_handle(&super::handle_from(&"x".repeat(50))));
+    }
+}
