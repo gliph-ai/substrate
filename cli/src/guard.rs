@@ -83,8 +83,41 @@ fn matches(seg: &[String], pat: &str) -> bool {
     words[1..].iter().all(|w| rest.any(|t| t == w || (w.starts_with("--") && t.starts_with(&format!("{w}=")))))
 }
 
-/// production, test or "" (not a deploy) for a shell command line.
+/// production, test or "" (not a deploy) for a shell command line. A script passed to a
+/// shell (`bash -lc '...'`, `sh -c "..."`) counts too, though quoted text is otherwise skipped.
 pub fn classify(cmd: &str, extra_prod: &[String], extra_test: &[String]) -> &'static str {
+    let outer = classify_line(cmd, extra_prod, extra_test);
+    let inner = shell_scripts(cmd).iter().map(|s| classify(s, extra_prod, extra_test)).max_by_key(|k| match *k { "production" => 2, "test" => 1, _ => 0 }).unwrap_or("");
+    if outer == "production" || inner == "production" { "production" } else if outer == "test" || inner == "test" { "test" } else { "" }
+}
+
+/// The scripts in `bash -c '...'` / `sh -lc "..."` / `zsh -c ...` on a line.
+fn shell_scripts(cmd: &str) -> Vec<String> {
+    let mut out = vec![];
+    let toks: Vec<&str> = cmd.split_whitespace().collect();
+    for (i, t) in toks.iter().enumerate() {
+        let prog = t.rsplit('/').next().unwrap_or(t);
+        if !matches!(prog, "bash" | "sh" | "zsh" | "dash") {
+            continue;
+        }
+        let Some(flag) = toks.get(i + 1) else { continue };
+        if !(flag.starts_with('-') && flag.ends_with('c') && !flag.starts_with("--")) {
+            continue;
+        }
+        // The script runs from after the flag: quoted to its closing quote, or the rest.
+        let after = cmd.split_once(*flag).map(|x| x.1).unwrap_or("").trim_start();
+        let script = match after.chars().next() {
+            Some(q @ ('\'' | '"')) => after[1..].split(q).next().unwrap_or("").to_string(),
+            _ => after.to_string(),
+        };
+        if !script.is_empty() {
+            out.push(script);
+        }
+    }
+    out
+}
+
+fn classify_line(cmd: &str, extra_prod: &[String], extra_test: &[String]) -> &'static str {
     let segs = segments(cmd);
     let any = |pats: Vec<&str>| segs.iter().any(|s| pats.iter().any(|p| matches(s, p)));
     let prod: Vec<&str> = PRODUCTION.iter().copied().chain(extra_prod.iter().map(String::as_str)).collect();
@@ -106,12 +139,29 @@ fn project_patterns(root: &str) -> (Vec<String>, Vec<String>) {
     (list("production"), list("test"))
 }
 
-/// Ok to run, or the reason to block. `input` is Claude Code's hook JSON.
-pub fn check(paths: &Paths, input: &Value) -> Result<(), String> {
-    if input["tool_name"].as_str() != Some("Bash") {
-        return Ok(());
+/// The shell command a tool call runs, whatever the agent calls its shell tool: Claude
+/// Code's Bash sends `command` as a string; Codex's shell tools send `command` or `cmd`,
+/// as a string or as an argument list (`["bash", "-lc", "git push"]`).
+pub fn command_of(tool_input: &Value) -> Option<String> {
+    let v = tool_input.get("command").or_else(|| tool_input.get("cmd"))?;
+    match v {
+        Value::String(s) => Some(s.clone()),
+        // ["bash", "-lc", "<script>"]: the script is the command.
+        Value::Array(a) => {
+            let parts: Vec<&str> = a.iter().filter_map(|x| x.as_str()).collect();
+            match parts.iter().position(|p| p.starts_with('-') && p.ends_with('c') && !p.starts_with("--")) {
+                Some(i) if i + 1 < parts.len() => Some(parts[i + 1].to_string()),
+                _ => Some(parts.join(" ")),
+            }
+        }
+        _ => None,
     }
-    let cmd = input["tool_input"]["command"].as_str().unwrap_or("");
+}
+
+/// Ok to run, or the reason to block. `input` is Claude Code's or Codex's PreToolUse JSON.
+pub fn check(paths: &Paths, input: &Value) -> Result<(), String> {
+    let Some(cmd) = command_of(&input["tool_input"]) else { return Ok(()) };
+    let cmd = cmd.as_str();
     let recs = active(paths, input["session_id"].as_str().unwrap_or(""), input["cwd"].as_str().unwrap_or(""));
     let Some(r) = recs.first() else { return Ok(()) };
     let (p, t) = project_patterns(&r.cwd);
@@ -151,6 +201,37 @@ pub fn install(exe: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// The same hook for Codex, in ~/.codex/hooks.json (Codex then asks you to review it once).
+pub fn install_codex(exe: &str) -> anyhow::Result<bool> {
+    let home = std::env::var("HOME")?;
+    let dir = Path::new(&home).join(".codex");
+    if !dir.exists() {
+        return Ok(false);
+    }
+    let path = dir.join("hooks.json");
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let mut v: Value = serde_json::from_str(&raw)?;
+    let arr = v.as_object_mut().ok_or_else(|| anyhow::anyhow!("hooks.json is not an object"))?
+        .entry("hooks").or_insert_with(|| serde_json::json!({}))
+        .as_object_mut().ok_or_else(|| anyhow::anyhow!("hooks is not an object"))?
+        .entry("PreToolUse").or_insert_with(|| serde_json::json!([]))
+        .as_array_mut().ok_or_else(|| anyhow::anyhow!("PreToolUse is not a list"))?;
+    if arr.iter().any(|h| h.to_string().contains(" guard\"")) {
+        return Ok(false);
+    }
+    arr.push(serde_json::json!({"hooks": [{"type": "command", "command": format!("{exe} guard"), "timeout": 10}]}));
+    if path.exists() {
+        std::fs::copy(&path, path.with_extension("json.before-substrate"))?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&v)? + "\n")?;
+    Ok(true)
+}
+
+pub fn installed_codex() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::fs::read_to_string(Path::new(&home).join(".codex/hooks.json")).is_ok_and(|s| s.contains(" guard\""))
+}
+
 pub fn installed() -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     std::fs::read_to_string(Path::new(&home).join(".claude/settings.json")).is_ok_and(|s| s.contains(" guard\""))
@@ -158,7 +239,20 @@ pub fn installed() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::classify;
+    use super::{classify, command_of};
+
+    #[test]
+    fn commands_from_any_shell_tool() {
+        use serde_json::json;
+        assert_eq!(command_of(&json!({"command": "git push"})).as_deref(), Some("git push"));
+        assert_eq!(command_of(&json!({"command": ["bash", "-lc", "git push origin main"]})).as_deref(), Some("git push origin main"));
+        assert_eq!(command_of(&json!({"cmd": "pl up"})).as_deref(), Some("pl up"));
+        assert!(command_of(&json!({"file_path": "x"})).is_none());
+        assert_eq!(classify("bash -lc 'cd app && git push origin main'", &[], &[]), "production");
+        assert_eq!(classify("/bin/zsh -lc \"pl up\"", &[], &[]), "production");
+        assert_eq!(classify("bash -c 'cargo test'", &[], &[]), "");
+        assert_eq!(classify("git commit -m 'bash -c git push later'", &[], &[]), "", "a commit message is not a push");
+    }
 
     #[test]
     fn deploy_commands() {

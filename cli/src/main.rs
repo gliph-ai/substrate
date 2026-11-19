@@ -230,6 +230,9 @@ async fn run() -> Result<()> {
         let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
         let paths = Paths::new(Paths::default_root())?;
         if let Err(why) = substrate_cli::guard::check(&paths, &v) {
+            // Exit 2 with the reason on stderr blocks in Claude Code and Codex; the JSON
+            // decision on stdout says the same for hosts that read that instead.
+            println!("{}", serde_json::json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": why}}));
             eprintln!("{why}");
             std::process::exit(2);
         }
@@ -282,6 +285,9 @@ async fn run() -> Result<()> {
                 println!("The relay runs in the background and starts at login. Run `substrate status` to check it.");
                 if substrate_cli::guard::install(&exe)? {
                     println!("The deploy guard is on: Claude Code blocks deploys a tester's message does not allow.");
+                }
+                if substrate_cli::guard::install_codex(&exe)? {
+                    println!("The deploy guard is added for Codex. Approve it once in Codex under /hooks.");
                 }
             }
             DaemonCmd::Stop => {
@@ -421,7 +427,9 @@ async fn run() -> Result<()> {
         Cmd::Guard { cmd: Some(GuardCmd::Install) } => {
             let exe = std::env::current_exe()?.to_string_lossy().to_string();
             if substrate_cli::guard::install(&exe)? { println!("The deploy guard is on for Claude Code (~/.claude/settings.json; the old file is settings.json.before-substrate)."); }
-            else { println!("The deploy guard is already on."); }
+            else { println!("The deploy guard is already on for Claude Code."); }
+            if substrate_cli::guard::install_codex(&exe)? { println!("It is added for Codex too (~/.codex/hooks.json). Open Codex and approve the new hook under /hooks once: Codex runs a hook only after you review it."); }
+            else if substrate_cli::guard::installed_codex() { println!("It is already added for Codex."); }
         }
         Cmd::Guard { cmd: None } => unreachable!("handled before sign-in"),
     }
@@ -479,6 +487,7 @@ async fn doctor(paths: &Paths, cfg: &Config, api: &Api) {
     let reach = api.http.get(format!("{}/healthz", cfg.server)).send().await.map(|r| r.status().is_success()).unwrap_or(false);
     println!("{} server: {}", ok(reach), cfg.server);
     println!("{} deploy guard: {}", ok(substrate_cli::guard::installed()), if substrate_cli::guard::installed() { "on in Claude Code" } else { "off (substrate guard install)" });
+    println!("{} deploy guard for Codex: {}", ok(substrate_cli::guard::installed_codex()), if substrate_cli::guard::installed_codex() { "added (approve it once in Codex under /hooks)" } else { "not added (substrate guard install)" });
     if creds.is_some() {
         let me = api.call("GET", "/relay/api/whoami", None).await;
         println!("{} account: {}", ok(me.is_ok()), match &me { Ok(v) => format!("{} on {}", v["account"].as_str().unwrap_or(""), v["machine"].as_str().unwrap_or("")), Err(e) => e.to_string() });
