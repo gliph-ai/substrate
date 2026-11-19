@@ -37,6 +37,11 @@ deploy:
     PL_VERSION: 0.1.0-6e5dc8d
     PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
   script:
+    # Pipelines can finish out of order: only the commit at the tip of main
+    # deploys, so an older pipeline never rolls production back.
+    - |
+      tip=$(git ls-remote "$CI_REPOSITORY_URL" refs/heads/main | cut -f1)
+      if [ "$tip" != "$CI_COMMIT_SHA" ]; then echo "main is at $tip; not deploying $CI_COMMIT_SHA"; exit 0; fi
     - curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
     - echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
     - chmod +x /usr/local/bin/pl
