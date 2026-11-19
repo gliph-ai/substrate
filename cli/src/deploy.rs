@@ -101,17 +101,41 @@ impl Watcher {
         if now - job.changed_at > 45 * 60 {
             return self.report(&mut job, "unknown", "no change observed for 45 minutes").await;
         }
-        // CI: GitHub Actions through the developer's own `gh`.
-        if matches!(job.stage.as_str(), "fix_committed" | "ci_running") && !job.ci_url.contains("gitlab") {
-            if let Some((status, conclusion, url, id)) = gh_run(&job.cwd, &job.commit) {
-                job.run_id = id;
-                if job.ci_url.is_empty() {
-                    job.ci_url = url;
+        // CI and deploy: every GitHub Actions run for the commit, through the developer's
+        // own `gh`. A workflow named deploy, release or publish is the deploy; the rest is CI.
+        if matches!(job.stage.as_str(), "fix_committed" | "ci_running" | "ci_passed" | "deploying") && !job.ci_url.contains("gitlab") {
+            let runs = gh_runs(&job.cwd, &job.commit);
+            if !runs.is_empty() {
+                let is_deploy = |r: &Run| ["deploy", "release", "publish"].iter().any(|k| r.name.to_lowercase().contains(k));
+                let (deploy, ci): (Vec<&Run>, Vec<&Run>) = runs.iter().partition(|r| is_deploy(r));
+                let done = |r: &Run| r.status == "completed";
+                let failed = |r: &Run| done(r) && !matches!(r.conclusion.as_str(), "success" | "skipped" | "neutral");
+                if let Some(r) = ci.first() {
+                    job.run_id = r.id.clone();
+                    if job.ci_url.is_empty() {
+                        job.ci_url = r.url.clone();
+                    }
                 }
-                match (status.as_str(), conclusion.as_str()) {
-                    ("completed", "success") => return self.report(&mut job, "ci_passed", "").await,
-                    ("completed", c) if !c.is_empty() => return self.report(&mut job, "ci_failed", c).await,
-                    _ => return self.report(&mut job, "ci_running", "").await,
+                if let Some(r) = ci.iter().copied().find(|r| failed(r)) {
+                    return self.report(&mut job, "ci_failed", &r.conclusion).await;
+                }
+                if !ci.iter().all(|r| done(r)) {
+                    return self.report(&mut job, "ci_running", "").await;
+                }
+                if deploy.is_empty() {
+                    return self.report(&mut job, "ci_passed", "").await;
+                }
+                if let Some(r) = deploy.iter().copied().find(|r| failed(r)) {
+                    return self.report(&mut job, "deploy_failed", &format!("{}: {}", r.name, r.conclusion)).await;
+                }
+                if !deploy.iter().all(|r| done(r)) {
+                    return self.report(&mut job, "deploying", "").await;
+                }
+                // The deploy workflow finished green: that is an observed deploy. Without a
+                // retest URL to check, it is ready to retest; with one, the live check decides.
+                self.report(&mut job, "deployed", &deploy.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", ")).await?;
+                if job.verify_url.is_empty() {
+                    return self.report(&mut job, "ready_to_retest", "").await;
                 }
             }
         }
@@ -140,26 +164,58 @@ fn short(sha: &str) -> Option<&str> {
     (sha.len() >= 7).then(|| &sha[..7])
 }
 
-/// The newest GitHub Actions run for a commit: (status, conclusion, url, id).
-fn gh_run(cwd: &str, commit: &str) -> Option<(String, String, String, String)> {
+pub struct Run {
+    pub name: String,
+    pub status: String,
+    pub conclusion: String,
+    pub url: String,
+    pub id: String,
+}
+
+/// Every GitHub Actions run for a commit. `gh run list --commit` matches only a full
+/// sha, and agents often report a short one, so it is expanded first.
+fn gh_runs(cwd: &str, commit: &str) -> Vec<Run> {
     if commit.is_empty() {
-        return None;
+        return vec![];
     }
+    let full = full_sha(cwd, commit).unwrap_or_else(|| commit.to_string());
     let mut cmd = Command::new("gh");
-    cmd.args(["run", "list", "--commit", commit, "--json", "databaseId,status,conclusion,url", "-L", "1"]);
+    cmd.args(["run", "list", "--commit", &full, "--json", "databaseId,status,conclusion,url,workflowName", "-L", "20"]);
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
+    let Some(out) = cmd.output().ok().filter(|o| o.status.success()) else { return vec![] };
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    v.as_array().into_iter().flatten().map(|r| Run {
+        name: r["workflowName"].as_str().unwrap_or("").into(),
+        status: r["status"].as_str().unwrap_or("").into(),
+        conclusion: r["conclusion"].as_str().unwrap_or("").into(),
+        url: r["url"].as_str().unwrap_or("").into(),
+        id: r["databaseId"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
+    }).collect()
+}
+
+pub fn full_sha(cwd: &str, commit: &str) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["rev-parse", "--verify", "--quiet", &format!("{commit}^{{commit}}")]);
+    if !cwd.is_empty() {
+        cmd.current_dir(cwd);
     }
-    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
-    let r = v.as_array()?.first()?;
-    Some((
-        r["status"].as_str().unwrap_or("").into(),
-        r["conclusion"].as_str().unwrap_or("").into(),
-        r["url"].as_str().unwrap_or("").into(),
-        r["databaseId"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
-    ))
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| s.len() == 40)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn short_sha_expands_for_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_str().unwrap();
+        let git = |a: &[&str]| assert!(std::process::Command::new("git").args(a).current_dir(d).output().unwrap().status.success());
+        git(&["init", "-q"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"]);
+        let full = super::full_sha(d, "HEAD").unwrap();
+        assert_eq!(super::full_sha(d, &full[..7]).as_deref(), Some(full.as_str()));
+        assert!(super::full_sha(d, "nothere").is_none());
+    }
 }
