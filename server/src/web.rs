@@ -1667,36 +1667,72 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
     let ms: Vec<(String, String, String, String, Option<DateTime<Utc>>, serde_json::Value)> = sqlx::query_as(
         "SELECT id, name, platform, version, last_seen, panes FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
-        div.stack style="padding:12px 0 48px" {
+        div.narrow.stack style="padding:16px 0 48px" {
             h1 { "Machines" }
             @if ms.is_empty() { div.card { p.muted { "No computer is paired. Install the relay and run " span.mono { "substrate login" } "." } (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login"])) } }
-            @for (mid, name, platform, version, seen, panes) in &ms {
-                div.card {
-                    div.between {
-                        div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
-                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
-                    }
-                    @if !app.machine_online(mid) { span.muted style="font-size:13px" { @if let Some(s) = seen { "Last seen " (ago_text(s)) "." } @else { "Never connected." } } }
-                    @for (space, list) in spaces(panes) {
-                        div.list style="padding:0;background:transparent" {
-                            div.label { (space) }
-                            @for pn in list {
-                                @let pid = pn["pane_id"].as_str().unwrap_or("");
-                                @let bound = projects.iter().find(|p| &p.machine_id == mid && p.pane_id == pid);
-                                @let status = pn["status"].as_str().unwrap_or("");
-                                @match bound {
-                                    Some(p) => a.item href=(format!("/projects/{}", p.id)) {
-                                        span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span.mono.faint { (pid) } }
-                                        span.r { (status_tag(status)) }
-                                    },
-                                    None => div.item {
-                                        span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } }
-                                        span.r { (status_tag(status)) }
-                                    },
+            @else {
+                div.list {
+                    @for (mid, name, platform, version, seen, panes) in &ms {
+                        @let list = panes.as_array().map(|l| l.iter().filter(|p| !p["agent"].as_str().unwrap_or("").is_empty()).collect::<Vec<_>>()).unwrap_or_default();
+                        @let working = list.iter().filter(|p| p["status"] == "working").count();
+                        a.item.link-row href=(format!("/machines/{mid}")) {
+                            span.l.row style="gap:12px" {
+                                span.ev-av.mark { (ic("monitor")) }
+                                span.stack style="gap:2px;align-items:flex-start" {
+                                    span.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} strong style="font-weight:500" { (name) } }
+                                    span.faint style="font-size:13px" { (platform) " · relay " (version) }
                                 }
                             }
+                            span.r.row {
+                                span.faint style="font-size:13px" {
+                                    @if app.machine_online(mid) { (list.len()) @if list.len() == 1 { " agent" } @else { " agents" } @if working > 0 { " · " (working) " working" } }
+                                    @else if let Some(s) = seen { "last seen " (ago_text(s)) } @else { "never connected" }
+                                }
+                                span.chev { (ic("arrow-right")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+/// GET /machines/{mid}: one computer, its agents grouped by Herdr workspace, and Disconnect.
+pub async fn machine_detail(State(app): State<App>, User(a): User, Path(mid): Path<String>) -> Result<Response, Fail> {
+    let (name, platform, version, seen, panes): (String, String, String, Option<DateTime<Utc>>, serde_json::Value) = sqlx::query_as(
+        "SELECT name, platform, version, last_seen, panes FROM machines WHERE id=$1 AND account_id=$2 AND NOT revoked",
+    ).bind(&mid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such computer"))?;
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
+    let online = app.machine_online(&mid);
+    Ok(Html(layout("Machines", Some(&a), Some("/live".into()), html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            div.crumbs { a href="/machines" style="text-decoration:none" { "Machines" } span.sep { "/" } span.muted { (name) } }
+            div.between {
+                div.row style="gap:14px" { span.ev-av.mark style="width:44px;height:44px" { (ic("monitor")) } h1 style="margin:0" { (name) } }
+                form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
+            }
+            div.card.row style="gap:16px;flex-wrap:wrap;font-size:14px" {
+                span.row { span class=(format!("dot {}", if online { "ok" } else { "" })) {} @if online { "Connected" } @else if let Some(s) = &seen { "Last seen " (ago_text(s)) } @else { "Never connected" } }
+                span.faint { (platform) " · relay " (version) }
+            }
+            @for (space, list) in spaces(&panes) {
+                div.list {
+                    div.label { (space) }
+                    @for pn in list {
+                        @let pid = pn["pane_id"].as_str().unwrap_or("");
+                        @let bound = projects.iter().find(|p| p.machine_id == mid && p.pane_id == pid);
+                        @let status = pn["status"].as_str().unwrap_or("");
+                        @match bound {
+                            Some(p) => a.item href=(format!("/projects/{}", p.id)) {
+                                span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span.mono.faint { (pid) } }
+                                span.r { (status_tag(status)) }
+                            },
+                            None => div.item {
+                                span.l { (logo(agent_logo(pn["agent"].as_str().unwrap_or("")), "")) span { (pn["title"].as_str().unwrap_or("")) } span.mono.faint { (pid) } }
+                                span.r { (status_tag(status)) }
+                            },
                         }
                     }
                 }

@@ -122,6 +122,7 @@ pub fn router(app: App) -> Router {
         .route("/connect/token/{prefix}/revoke", post(web::pat_revoke))
         .route("/pair", get(web::pair_get).post(web::pair_post))
         .route("/machines", get(web::machines))
+        .route("/machines/{mid}", get(web::machine_detail))
         .route("/machines/{mid}/revoke", post(web::machine_revoke))
         .route("/projects/{pid}/bind", post(web::project_bind))
         .route("/audit", get(web::audit_page))

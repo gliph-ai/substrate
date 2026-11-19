@@ -442,6 +442,10 @@ async fn offline_rebind_busy_and_restart() {
     let held = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "held by the old pane"})).await["structuredContent"]["message_id"].as_str().unwrap().to_string();
     sqlx::query("UPDATE messages SET stage='submitted' WHERE id=$1").bind(&held).execute(&t.app.db).await.unwrap();
     let mid: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
+    // The computer's own page lists its agents; nobody else can open it.
+    let page = t.http.get(format!("{}/machines/{mid}", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("Disconnect") && page.contains("w1:p9"), "machine page");
+    assert_eq!(t.http.get(format!("{}/machines/{mid}", t.base)).header("cookie", &w.tester.cookie).send().await.unwrap().status(), 404);
     let r = t.form(&w.dev, &format!("/projects/{}/bind", w.pid), &[("machine_id", mid.as_str()), ("pane_id", "w1:p3")]).await;
     assert_eq!(r.status(), 303);
     assert_eq!(t.stage(&held).await, "interrupted");
