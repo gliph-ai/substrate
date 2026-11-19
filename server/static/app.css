@@ -375,3 +375,4 @@ a.me { text-decoration: none; gap: 8px; }
 .ev-line .row { margin-left: 30px; }
 .ev-line .deploy { margin-left: 30px; }
 .timeline { gap: 8px; }
+.deploy-track.card { padding: 12px 16px; font-size: 13px; gap: 10px; }

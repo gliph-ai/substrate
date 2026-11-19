@@ -297,6 +297,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
             @for (cid, p, title, events, msgs, atts) in &history {
                 section.stack {
                     div.row { (picon(&p.id, &p.name, &p.icon_etag, 20)) a href=(format!("/conversations/{cid}")) style="text-decoration:none;font-weight:500" { (title) } span.faint style="font-size:13px" { (p.name) } }
+                    @if let Some(m) = msgs.iter().rev().find(|m| !m.deploy_stage.is_empty()) { (crate::web::deploy_track(&m.deploy_stage)) }
                     div.stack.timeline { @for e in events.iter().rev() { (crate::web::event_card(&app, &a, p, msgs, atts, e, true, &host)) } }
                 }
             }

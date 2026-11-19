@@ -994,6 +994,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
         }
         div.split style="padding-bottom:48px" {
             div.main.stack.timeline {
+                @if let Some(m) = msgs.iter().rev().find(|m| !m.deploy_stage.is_empty()) { (deploy_track(&m.deploy_stage)) }
                 @if let Some(m) = latest {
                     @if m.stage == "awaiting_sender" && !owner {
                         form.card method="post" action=(format!("/conversations/{cid}/answer")) {
@@ -1119,8 +1120,6 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
         "deploy" => {
             let d = &e.data["deploy"];
             let st = d["stage"].as_str().unwrap_or("");
-            let order = ["fix_committed", "ci_running", "ci_passed", "deploying", "deployed", "verified", "ready_to_retest"];
-            let at = order.iter().position(|s| *s == st);
             let failed = matches!(st, "ci_failed" | "deploy_failed" | "unknown");
             let ci = d["ci_url"].as_str().unwrap_or("");
             let verify = d["verify_url"].as_str().unwrap_or("");
@@ -1128,12 +1127,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
             html! {
                 article.ev-line id="deploy" {
                     div.head { span.who { span.ev-av.mark { (logo(Some(if gitlab { "gitlab" } else { "github-actions" }), "")) } span style="font-weight:500" { "CI and deploy" } span.role { "watched by the relay" } } span.time { (hhmm(&e.created_at)) } }
-                    div.body { (text) }
-                    @if !failed { div.deploy {
-                        @for (i, s) in order.iter().enumerate() {
-                            @if at.map(|a| i <= a).unwrap_or(false) { div class=(if *s == "ready_to_retest" { "on" } else { "" }) { span style=(if *s == "ready_to_retest" { "" } else { "color:var(--teal)" }) { "✓ " (s.replace('_', " ")) } } }
-                        }
-                    } } @else { div.tag.bad { (st.replace('_', " ")) } }
+                    div.body { @if failed { span.tag.bad { (st.replace('_', " ")) } " " } (text) }
                     div.row style="font-size:14px" {
                         @if !ci.is_empty() && (owner || p.ci_public) { a href=(ci) rel="noopener noreferrer" target="_blank" { "CI run" } }
                         @if !verify.is_empty() && crate::safety::host_allowed(verify, own_host, &p.retest_hosts) { a href=(verify) rel="noopener noreferrer" target="_blank" { (verify) } }
@@ -1143,6 +1137,28 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
             }
         }
         _ => html! {},
+    }
+}
+
+/// Commit › Checks › Push › CI › Deploy › Live for a message's deploy stage: every
+/// step shown, done ones ticked, the current one marked, a failure in red.
+pub(crate) fn deploy_track(stage: &str) -> Markup {
+    let (at, how): (usize, &str) = match stage {
+        "committing" => (0, "run"), "running_checks" => (1, "run"), "pushing" => (2, "run"),
+        "fix_committed" => (3, "wait"), "ci_running" => (3, "run"), "ci_passed" => (4, "wait"), "ci_failed" => (3, "fail"),
+        "deploying" => (4, "run"), "deploy_failed" => (4, "fail"), "deployed" => (5, "wait"),
+        "verified" | "ready_to_retest" => (6, "done"),
+        _ => return html! {},
+    };
+    let steps = ["Commit", "Checks", "Push", "CI", "Deploy", "Live"];
+    html! {
+        div.deploy-track.card {
+            @for (i, s) in steps.iter().enumerate() {
+                @let state = if i < at { "done" } else if i == at { how } else { "todo" };
+                span class=(format!("step {state}")) { span.mark { (match state { "done" => "✓", "fail" => "✕", "run" => "✻", _ => "·" }) } (s) }
+                @if i + 1 < steps.len() { span.sep { "›" } }
+            }
+        }
     }
 }
 

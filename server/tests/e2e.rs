@@ -297,6 +297,10 @@ async fn full_loop_approval_delivery_reply_deploy() {
     let (took, r) = t2.await.unwrap();
     assert!(took < Duration::from_secs(5), "long-poll woke on the event");
     assert_eq!(r["result"]["structuredContent"]["deployment_stage"], "ready_to_retest");
+    // The conversation shows the whole deploy track, every step ticked.
+    let cid: String = sqlx::query_scalar("SELECT conversation_id FROM messages WHERE id=$1").bind(&mid).fetch_one(&t.app.db).await.unwrap();
+    let page = t.http.get(format!("{}/conversations/{cid}", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("deploy-track") && page.matches("step done").count() == 6, "deploy track");
 }
 
 #[tokio::test]
