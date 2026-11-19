@@ -170,14 +170,14 @@ async fn render(app: &AppInner, a: &crate::auth::Account, flash: Option<&str>, n
                     div.secret { (u) }
                     div.row { button.btn.primary type="button" data-copy=(u) { (ic("copy")) "Copy link" } span.faint style="font-size:13px" { "You see it only once." } }
                     p.muted style="margin:0;font-size:14px" { "Opened in a browser, the link is a chat with your agents." }
-                    p.muted style="margin:0;font-size:14px" {
-                        "In Claude: Settings › Connectors › Add custom connector, paste the link, leave authentication off. "
-                        "In ChatGPT: Settings › Apps › Advanced settings › Developer mode, then create an app with the link and no authentication."
+                    div.stack style="gap:8px;font-size:14px" {
+                        div.row.muted { img.logo src="/static/logos/claude.svg" alt="Claude" width="18" height="18"; span { strong style="color:var(--text)" { "Claude" } " · Settings › Connectors › Add custom connector. Paste the link, leave authentication off." } }
+                        div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } " · Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
                     }
                 }
             }
             @if projects.is_empty() {
-                div.card { h3 { "Add a project first" } p.muted { "A link gives access to projects. Bind a herdr pane with the relay, then come back." } }
+                div.card { h3 { "Add a project first" } p.muted { "A link gives access to projects. Install the relay: each agent in Herdr gets a project." } }
             } @else {
                 form.card.stack method="post" action="/links" {
                     (csrf(a))
