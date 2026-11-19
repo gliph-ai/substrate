@@ -585,17 +585,7 @@ pub async fn api_projects(State(app): State<App>, headers: HeaderMap) -> Result<
     Ok(Json(json!({"projects": out})))
 }
 
-pub async fn api_add_project(State(app): State<App>, headers: HeaderMap, Json(a): Json<AddProject>) -> Result<Json<Value>, Fail> {
-    let (account, machine) = machine_auth(&app, &headers).await?;
-    if !valid_handle(&a.handle) {
-        return Err(Fail::new(400, "a handle is lowercase letters, digits and -, starting with a letter, up to 32"));
-    }
-    let pid = create_project(&app, &account, &machine, &a, true).await?;
-    Ok(Json(json!({"id": pid, "handle": a.handle})))
-}
-
-/// Create a project bound to a pane: `substrate project add`, and the
-/// relay's automatic project for each agent pane.
+/// Create the project for an agent pane (projects are 1-1 with Herdr panes).
 pub async fn create_project(app: &AppInner, account: &str, machine: &str, a: &AddProject, push: bool) -> Result<String, Fail> {
     let name = if a.name.trim().is_empty() { a.handle.clone() } else { proto::sanitize(&a.name, 64) };
     let pid = id("p");
@@ -633,16 +623,7 @@ pub struct Bind {
     pub cwd: String,
 }
 
-/// Explicit developer action: binding (or moving) a project to a pane on this
-/// machine. The only way a project ever changes where it delivers.
-pub async fn api_bind(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>, Json(b): Json<Bind>) -> Result<Json<Value>, Fail> {
-    let (account, machine) = machine_auth(&app, &headers).await?;
-    let p = owned_by_handle(&app, &account, &handle).await?;
-    bind_project(&app, &account, &p, &machine, &b).await?;
-    Ok(Json(json!({"ok": true})))
-}
-
-/// Bind (or move) a project to a pane: `substrate project bind` and Rebind on
+/// Move a project to another pane: Move here on
 /// the project page. Queued messages follow the project to the new agent.
 pub async fn bind_project(app: &AppInner, account: &str, p: &Project, machine: &str, b: &Bind) -> Result<(), Fail> {
     sqlx::query("UPDATE projects SET machine_id=$2, pane_id=$3, agent_session=$4, agent=$5, cwd=$6, state='unknown' WHERE id=$1")
@@ -664,16 +645,6 @@ pub async fn bind_project(app: &AppInner, account: &str, p: &Project, machine: &
         reconcile_panes(app, machine, &ps.0, true).await?;
     }
     Ok(())
-}
-
-pub async fn api_unbind(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>) -> Result<Json<Value>, Fail> {
-    let (account, machine) = machine_auth(&app, &headers).await?;
-    let p = owned_by_handle(&app, &account, &handle).await?;
-    sqlx::query("UPDATE projects SET pane_id='', agent_session='', state='unbound', gone_at=now() WHERE id=$1").bind(&p.id).execute(&app.db).await?;
-    interrupt_in_flight(&app, &p.id, "The project was unbound before the agent finished. The developer can deliver it again.").await?;
-    audit(&app, &account, &p.id, &handle, "project.unbound", &p.pane_id, "").await;
-    push_bindings(&app, &machine).await?;
-    Ok(Json(json!({"ok": true})))
 }
 
 #[derive(Deserialize)]

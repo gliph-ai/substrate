@@ -41,9 +41,6 @@ Invite testers from the project page on https://substrate.gliph.sh.
 | `daemon run` | Runs the relay in the foreground. launchd uses this command. |
 | `herdr discover` | Lists Herdr's agents: pane, kind, status, title and directory. |
 | `projects` | Lists your projects with pane, state, relay mode and pending count. |
-| `project add <handle> --pane <id> [--name]` | Creates a project with a handle you pick. The relay already makes one for every agent pane, named after the pane. |
-| `project bind <handle> <pane>` | Binds a project to a pane, or moves it. Only this command changes the target. |
-| `project unbind <handle>` | Removes the binding. Messages stay in the queue. |
 | `project icon <handle> [--file PATH]` | Finds the project's logo again, or uploads the PNG or JPEG you give. |
 | `project mode <handle> approve` | Holds each message for your approval. |
 | `project mode <handle> auto [--for 1h\|8h\|<min>] --yes` | Turns on auto relay. Flagged messages still wait for you. |
@@ -89,4 +86,4 @@ The relay uses three Herdr commands:
 - `herdr agent prompt`: one write with a bracketed paste and Enter. A blocked agent gets no input.
 - `herdr agent read`
 
-The relay does not start, stop or answer an agent, and does not send keys. A project is bound to a pane id and the agent's session id. When one of the two changes, delivery stops. Run `project bind` to start it again.
+The relay does not start, stop or answer an agent, and does not send keys. Each agent pane in Herdr is one project. An agent restarted in the same folder keeps its project. A pane closed for 10 minutes takes its project with it.

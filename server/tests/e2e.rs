@@ -98,6 +98,11 @@ impl T {
         ws
     }
 
+    /// The project Substrate made for a pane.
+    async fn pane_project(&self, pane_id: &str) -> String {
+        sqlx::query_scalar("SELECT id FROM projects WHERE pane_id=$1").bind(pane_id).fetch_one(&self.app.db).await.unwrap()
+    }
+
     async fn mcp(&self, token: &str, tool: &str, args: Value) -> Value {
         let r: Value = self.http.post(format!("{}/mcp", self.base)).bearer_auth(token)
             .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}))
@@ -161,9 +166,14 @@ struct World {
 async fn world(t: &T) -> World {
     let dev = t.browser("dev@example.com").await;
     let machine = t.pair(&dev).await;
-    let (st, p) = t.relay_api(&machine, "POST", "/relay/api/projects", json!({"handle": "verna", "name": "Verna", "pane_id": "w1:p1", "agent_session": "s1", "agent": "claude", "cwd": "/work/verna"})).await;
-    assert_eq!(st, 200, "{p}");
-    let pid = p["id"].as_str().unwrap().to_string();
+    // The relay reports the Herdr pane; Substrate makes its project. Then it disconnects.
+    drop(t.ws(&machine, vec![pane("w1:p1", "s1", "idle")]).await);
+    let mid: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&dev.account).fetch_one(&t.app.db).await.unwrap();
+    for _ in 0..100 {
+        if !t.app.machine_online(&mid) { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = t.pane_project("w1:p1").await;
     let r = t.form(&dev, &format!("/projects/{pid}/invites"), &[("label", "Sarah"), ("days", "14"), ("max_uses", "1")]).await;
     let loc = r.headers()["location"].to_str().unwrap().to_string();
     let invite = loc.split("invite=").nth(1).unwrap().split('#').next().unwrap().to_string();
@@ -434,17 +444,14 @@ async fn offline_rebind_busy_and_restart() {
     let p = domain::project(&t.app, &w.pid).await.unwrap();
     assert_eq!((p.pane_id.as_str(), p.agent_session.as_str()), ("w1:p3", "s3"));
 
-    // Deleting a project whose agent still runs: the agent gets a fresh one.
-    let other: String = sqlx::query_scalar("SELECT id FROM projects WHERE handle='other'").fetch_one(&t.app.db).await.unwrap();
-    assert_eq!(t.form(&w.dev, &format!("/projects/{other}/delete"), &[]).await.status(), 303);
-    assert!(sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE id=$1").bind(&other).fetch_optional(&t.app.db).await.unwrap().is_none());
-
-    // Gone for 10 minutes: an empty project is cleaned up, one with a queue stays.
-    let (_, tmp) = t.relay_api(&w.machine, "POST", "/relay/api/projects", json!({"handle": "tmp", "pane_id": "w7:p7", "agent": "claude", "cwd": "/work/tmp"})).await;
-    sqlx::query("UPDATE projects SET state='needs_rebind', gone_at=now() - interval '11 minutes' WHERE handle IN ('tmp','verna')").execute(&t.app.db).await.unwrap();
+    // Projects are 1-1 with panes: gone 9 minutes stays (a restart may follow),
+    // gone 11 minutes goes, queue and all.
+    sqlx::query("UPDATE projects SET state='needs_rebind', gone_at=now() - interval '9 minutes' WHERE id=$1").bind(&w.pid).execute(&t.app.db).await.unwrap();
     domain::housekeeping(&t.app).await.unwrap();
-    let left: Vec<String> = sqlx::query_scalar("SELECT id FROM projects WHERE id = ANY($1)").bind(vec![tmp["id"].as_str().unwrap().to_string(), w.pid.clone()]).fetch_all(&t.app.db).await.unwrap();
-    assert_eq!(left, vec![w.pid.clone()]);
+    assert!(domain::project(&t.app, &w.pid).await.is_ok());
+    sqlx::query("UPDATE projects SET gone_at=now() - interval '11 minutes' WHERE id=$1").bind(&w.pid).execute(&t.app.db).await.unwrap();
+    domain::housekeeping(&t.app).await.unwrap();
+    assert!(domain::project(&t.app, &w.pid).await.is_err());
 }
 
 #[tokio::test]
@@ -517,9 +524,8 @@ async fn oauth_pkce_flow() {
 async fn question_round_trip_and_concurrent_projects() {
     let t = setup().await;
     let w = world(&t).await;
-    let (_, p2) = t.relay_api(&w.machine, "POST", "/relay/api/projects", json!({"handle": "tuli", "pane_id": "w2:p1", "agent_session": "z1", "agent": "codex"})).await;
-    let pid2 = p2["id"].as_str().unwrap().to_string();
-    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), Pane { pane_id: "w2:p1".into(), agent: "codex".into(), agent_session: "z1".into(), status: "idle".into(), ..Default::default() }]).await;
+    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), Pane { pane_id: "w2:p1".into(), agent: "codex".into(), agent_session: "z1".into(), status: "idle".into(), title: "Tuli".into(), cwd: "/work/tuli".into(), ..Default::default() }]).await;
+    let pid2 = t.pane_project("w2:p1").await;
 
     // Developer messages from the owner are auto-approved; two projects run at once.
     let owner_pat = oauth::create_pat(&t.app, &w.dev.account, "dev").await.unwrap();
@@ -581,10 +587,9 @@ async fn project_icon_from_the_relay() {
 async fn access_link_scopes_projects_and_permissions() {
     let t = setup().await;
     let w = world(&t).await;
-    let (st, other) = t.relay_api(&w.machine, "POST", "/relay/api/projects", json!({"handle": "tuli", "name": "Tuli", "pane_id": "w1:p2", "agent_session": "s2", "agent": "claude", "cwd": "/work/tuli"})).await;
-    assert_eq!(st, 200, "{other}");
-    let other = other["id"].as_str().unwrap().to_string();
-    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), pane("w1:p2", "s2", "idle")]).await;
+    let tuli = Pane { pane_id: "w1:p2".into(), agent: "claude".into(), agent_session: "s2".into(), status: "idle".into(), cwd: "/work/tuli".into(), title: "Tuli".into(), ..Default::default() };
+    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle"), tuli]).await;
+    let other = t.pane_project("w1:p2").await;
 
     // Verna only; skip approval; no replies, no files.
     let p = format!("p_{}", w.pid);

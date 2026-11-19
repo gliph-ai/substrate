@@ -535,11 +535,10 @@ pub async fn housekeeping(app: &AppInner) -> Result<(), Fail> {
     for m in expired {
         add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "Expired before it could be delivered.", json!({"message_id": m.id, "stage": "expired"}), false).await?;
     }
-    // Projects whose agent left 10 minutes ago and nobody waits on. A project
-    // with queued messages stays under Agents gone until the developer moves it.
+    // Projects are 1-1 with Herdr panes: one with no pane goes now, one whose
+    // agent left goes after 10 minutes (a restart in its folder keeps it), queue and all.
     let gone = sqlx::query_as::<_, Project>(
-        "SELECT * FROM projects p WHERE state IN ('needs_rebind','unbound') AND gone_at < now() - interval '10 minutes'
-         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.project_id=p.id AND m.stage IN ('pending_approval','held','approved','dispatched'))",
+        "SELECT * FROM projects WHERE pane_id='' OR state='unbound' OR (state='needs_rebind' AND gone_at < now() - interval '10 minutes')",
     ).fetch_all(&app.db).await?;
     for p in gone {
         crate::app::audit(app, &p.owner_id, "", "Substrate", "project.cleaned_up", &p.handle, "agent gone for 10 minutes").await;

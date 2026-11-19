@@ -66,7 +66,7 @@ The log has JSON lines. Useful fields: `msg`, `error`, `machine`. On each develo
 
 | Symptom | Check | Fix |
 |---|---|---|
-| Testers' messages stay "approved" | project page: relay offline or `needs_rebind` | The developer runs `substrate doctor`, and `substrate project bind` after a pane change. |
+| Testers' messages stay "approved" | project page: relay offline or `needs_rebind` | The developer runs `substrate doctor`, or uses Move here on the project page after a pane change. |
 | A message is "uncertain" | the relay restarted during a submit | The developer reads the agent's pane, then clicks Deliver again or Cancel. |
 | Magic links do not arrive | logs for `ses` errors | Check the SES key in Pushleft secrets and the SES sending quota. |
 | `/substrate` is missing in Gliph | logs for `gliph plugin` | Check that `GLIPH_PLUGIN_TOKEN` is valid on gliph.sh. Restart the web role. |

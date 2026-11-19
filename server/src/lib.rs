@@ -123,7 +123,6 @@ pub fn router(app: App) -> Router {
         .route("/machines", get(web::machines))
         .route("/machines/{mid}/revoke", post(web::machine_revoke))
         .route("/projects/{pid}/bind", post(web::project_bind))
-        .route("/projects/{pid}/delete", post(web::project_delete))
         .route("/audit", get(web::audit_page))
         // MCP + OAuth
         .route("/mcp", get(mcp::get).post(mcp::post))
@@ -150,9 +149,7 @@ pub fn router(app: App) -> Router {
         .route("/relay/attachments/{aid}", get(relay::attachment_download))
         .route("/relay/api/whoami", get(relay::api_whoami))
         .route("/relay/api/logout", post(relay::api_logout))
-        .route("/relay/api/projects", get(relay::api_projects).post(relay::api_add_project))
-        .route("/relay/api/projects/{handle}/bind", post(relay::api_bind))
-        .route("/relay/api/projects/{handle}/unbind", post(relay::api_unbind))
+        .route("/relay/api/projects", get(relay::api_projects))
         .route("/relay/api/projects/{handle}/mode", post(relay::api_mode))
         .route("/relay/api/projects/{handle}/icon", post(relay::api_icon))
         .route("/relay/api/approvals", get(relay::api_approvals))

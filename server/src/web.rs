@@ -770,9 +770,6 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/invite substrate" } ", then " span.mono { "/substrate link " (p.handle) } } }
                             @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/projects/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small.tertiary type="submit" { (ic("x")) "Unlink" } } }
                         }
-                        form method="post" action=(format!("/projects/{pid}/delete")) data-confirm="Delete this project? Its conversations, files and access go too. An agent still running in its pane gets a new project." {
-                            (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Delete project" }
-                        }
                     }
                 }
             }
@@ -839,15 +836,6 @@ pub async fn project_settings(State(app): State<App>, headers: HeaderMap, User(a
         .execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), "project.settings", &pid, &format!("retest_hosts={} ci_public={}", hosts.join(","), f.ci_public.is_some())).await;
     Ok(Redirect::to(&format!("/projects/{pid}?flash=Saved.")).into_response())
-}
-
-pub async fn project_delete(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
-    check_csrf(&app, &headers, &a, &f.csrf)?;
-    domain::require_owner(&app, &pid, &a.id).await?;
-    let p = domain::project(&app, &pid).await?;
-    audit(&app, &a.id, "", &a.label(), "project.deleted", &p.handle, &pid).await;
-    domain::delete_project(&app, &p).await?;
-    Ok(Redirect::to("/").into_response())
 }
 
 #[derive(Deserialize)]

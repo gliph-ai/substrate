@@ -116,12 +116,6 @@ enum HerdrCmd {
 
 #[derive(Subcommand)]
 enum ProjectCmd {
-    /// Create a project and bind it to a Herdr pane on this computer.
-    Add { handle: String, #[arg(long)] pane: String, #[arg(long)] name: Option<String> },
-    /// Bind a project to a pane, or move it. Only this command changes the target.
-    Bind { handle: String, pane: String },
-    /// Remove the binding. Messages stay in the queue.
-    Unbind { handle: String },
     /// Upload the project's logo again, from its folder or from --file.
     Icon { handle: String, #[arg(long)] file: Option<String> },
     /// approve: each message waits for you. auto: messages go to the agent without approval.
@@ -204,11 +198,6 @@ fn table(rows: &[Vec<String>]) {
         let line: Vec<String> = r.iter().enumerate().map(|(i, c)| format!("{c:<w$}", w = w[i])).collect();
         println!("{}", line.join("  ").trim_end());
     }
-}
-
-fn find_pane(id: &str) -> Result<substrate_proto::Pane> {
-    let panes = herdr::Cli::new().list().context("no answer from Herdr. Is herdr running?")?;
-    panes.into_iter().find(|p| p.pane_id == id).with_context(|| format!("no agent in Herdr pane {id}; see `substrate herdr discover`"))
 }
 
 #[tokio::main]
@@ -307,30 +296,12 @@ async fn run() -> Result<()> {
             table(&rows);
         }
         Cmd::Project { cmd } => match cmd {
-            ProjectCmd::Add { handle, pane, name } => {
-                let p = find_pane(&pane)?;
-                api.call("POST", "/relay/api/projects", Some(json!({"handle": handle, "name": name.unwrap_or_default(), "pane_id": p.pane_id,
-                    "agent_session": p.agent_session, "agent": p.agent, "cwd": p.cwd}))).await?;
-                println!("Created {handle} on {} ({} in {}). You approve each message.", p.pane_id, p.agent, p.cwd);
-                upload_icon(&api, &handle, &p.cwd, None).await;
-                println!("Invite testers from {}/", cfg.server);
-            }
-            ProjectCmd::Bind { handle, pane } => {
-                let p = find_pane(&pane)?;
-                api.call("POST", &format!("/relay/api/projects/{handle}/bind"), Some(json!({"pane_id": p.pane_id, "agent_session": p.agent_session, "agent": p.agent, "cwd": p.cwd}))).await?;
-                println!("{handle} now delivers to {} ({}).", p.pane_id, p.agent);
-                upload_icon(&api, &handle, &p.cwd, None).await;
-            }
             ProjectCmd::Icon { handle, file } => {
                 let cwd = api.call("GET", "/relay/api/projects", None).await?["projects"].as_array().into_iter().flatten()
                     .find(|p| p["handle"] == handle.as_str()).and_then(|p| p["cwd"].as_str().map(String::from)).unwrap_or_default();
                 if !upload_icon(&api, &handle, &cwd, file.as_deref()).await {
                     bail!("no logo in the project folder. Add --file <png>.");
                 }
-            }
-            ProjectCmd::Unbind { handle } => {
-                api.call("POST", &format!("/relay/api/projects/{handle}/unbind"), None).await?;
-                println!("{handle} is unbound. Messages stay in the queue.");
             }
             ProjectCmd::Mode { handle, mode, for_, yes } => {
                 let minutes = match for_.as_deref() {
