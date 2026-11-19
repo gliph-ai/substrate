@@ -224,9 +224,14 @@ table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last
 .chat-side { background: var(--card); padding: 18px 14px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
 .chat-brand { padding: 2px 6px 10px; }
 .chat-side .label { margin-top: 14px; padding: 0 6px; }
-.chat-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 12px; background: transparent; color: var(--text-2); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.chat-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--text-2); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
 .chat-item:hover { background: var(--card-2); color: var(--text); }
-.chat-item.on { background: var(--card-2); color: var(--text); box-shadow: inset 3px 0 0 #7B2CFF; }
+/* Selected: a full electric border; the first time, a light runs round it once. */
+.chat-item.on { color: var(--text); background: linear-gradient(var(--card-2), var(--card-2)) padding-box, linear-gradient(90deg, #3B5BFF, #7B2CFF, #C04BFF, #3B5BFF) border-box; background-size: 100% 100%, 300% 100%; box-shadow: 0 0 14px #5B3BFF33; }
+.chat-item.on.pop { animation: sel-sweep .7s ease-out 1, sel-glow .7s ease-out 1; }
+@keyframes sel-sweep { from { background-position: 0 0, 100% 0; } to { background-position: 0 0, 0 0; } }
+@keyframes sel-glow { 0% { box-shadow: 0 0 0 0 #7B2CFFAA; } 60% { box-shadow: 0 0 0 5px #7B2CFF00, 0 0 22px #5B3BFF66; } 100% { box-shadow: 0 0 14px #5B3BFF33; } }
+@media (prefers-reduced-motion: reduce) { .chat-item.on.pop { animation: none; } }
 .chat-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item .faint { font-size: 12px; }
 .chat-who { margin-top: auto; padding: 10px 6px 0; font-size: 12px; overflow-wrap: anywhere; }

@@ -274,10 +274,18 @@ document.addEventListener("submit", (e) => {
     const t = el("span", "picon tile", (p.name || "?").charAt(0).toUpperCase()); t.style.cssText = "width:22px;height:22px;font-size:10px"; return t;
   }
 
+  // The selection animates once: only when it changes, not when a live refresh redraws it.
+  const popped = new Map(); // kind -> [key, first shown]
+  function pop(key) {
+    const kind = key.slice(0, 2), seen = popped.get(kind), t = performance.now();
+    if (!seen || seen[0] !== key) { popped.set(kind, [key, t]); return " pop"; }
+    // The same click redraws the list twice; later live refreshes must not replay it.
+    return t - seen[1] < 120 ? " pop" : "";
+  }
   function sidebar(convs) {
     const box = $("chat-projects"); box.replaceChildren();
     for (const p of S.projects) {
-      const b = el("button", "chat-item" + (p.project_id === S.pid ? " on" : ""));
+      const b = el("button", "chat-item" + (p.project_id === S.pid ? " on" + pop("p:" + p.project_id) : ""));
       b.type = "button";
       b.append(icon(p), el("span", "grow", p.name), agentMark(p));
       b.onclick = () => { S.pid = p.project_id; fresh(); };
@@ -287,7 +295,7 @@ document.addEventListener("submit", (e) => {
     if (convs) {
       const c = $("chat-convs"); c.replaceChildren();
       for (const v of convs) {
-        const b = el("button", "chat-item" + (v.conversation_id === S.cid ? " on" : ""));
+        const b = el("button", "chat-item" + (v.conversation_id === S.cid ? " on" + pop("c:" + v.conversation_id) : ""));
         b.type = "button";
         b.append(el("span", "grow", v.title || "Conversation"), el("span", "faint", v.project));
         b.onclick = () => open(v.conversation_id);
