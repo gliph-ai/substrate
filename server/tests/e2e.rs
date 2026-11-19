@@ -599,6 +599,11 @@ async fn access_link_scopes_projects_and_permissions() {
     assert_eq!(r.status(), 200);
     assert!(r.text().await.unwrap().contains(&format!("data-rpc=\"/mcp/{secret}\"")));
     assert_eq!(t.http.get(&url).send().await.unwrap().status(), 405);
+    // The link can ask CHIMERA to sing a message; nobody else can.
+    let r = t.http.post(format!("{}/sing", t.base)).header("x-link", &secret).json(&json!({"text": "whats this"})).send().await.unwrap();
+    assert_eq!(r.headers()["content-type"], "audio/wav");
+    assert_eq!(&r.bytes().await.unwrap()[..4], b"RIFF");
+    assert_eq!(t.http.post(format!("{}/sing", t.base)).json(&json!({"text": "hi"})).send().await.unwrap().status(), 401);
     // Signed-in testers chat through /chat/rpc with their cookie and CSRF token.
     let rpc = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_projects", "arguments": {}}});
     let r: Value = t.http.post(format!("{}/chat/rpc", t.base)).header("cookie", &w.tester.cookie).header("origin", &t.base).header("x-csrf", &w.tester.csrf)

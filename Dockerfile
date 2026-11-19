@@ -1,7 +1,7 @@
 # Substrate cloud: one static Rust binary (axum + Postgres), migrations and
 # static assets compiled in. The CLI is built and published separately
 # (cli/release.sh); only the server ships in this image.
-FROM rust:1.90-alpine AS build
+FROM rust:1.96-alpine AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

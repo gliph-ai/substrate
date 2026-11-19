@@ -8,6 +8,7 @@ pub mod domain;
 pub mod files;
 pub mod gliph;
 pub mod chat;
+pub mod sing;
 pub mod links;
 pub mod mail;
 pub mod mcp;
@@ -45,6 +46,7 @@ static STATIC: &[(&str, &str, &[u8])] = &[
     ("logos/github-actions.svg", "image/svg+xml", include_bytes!("../static/logos/github-actions.svg")),
     ("logos/gitlab.svg", "image/svg+xml", include_bytes!("../static/logos/gitlab.svg")),
     ("logos/gliph.png", "image/png", include_bytes!("../static/logos/gliph.png")),
+    ("logos/chimera.png", "image/png", include_bytes!("../static/logos/chimera.png")),
     ("logos/substrate.png", "image/png", include_bytes!("../static/logos/substrate.png")),
 ];
 
@@ -128,6 +130,7 @@ pub fn router(app: App) -> Router {
         .route("/mcp/{secret}", get(chat::link_page).post(mcp::post_link))
         .route("/chat", get(chat::page))
         .route("/chat/rpc", post(chat::rpc))
+        .route("/sing", post(sing::sing))
         .route("/links", get(links::page).post(links::create_post))
         .route("/links/new", get(links::new_page))
         .route("/links/{lid}/revoke", post(links::revoke_post))

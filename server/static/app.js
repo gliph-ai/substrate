@@ -154,6 +154,32 @@ document.addEventListener("submit", (e) => {
     $("chat-log").append(st.el);
   }
 
+  // Sing: the CHIMERA head on your own message sings it up a scale (POST /sing).
+  // An access link proves itself with x-link; a signed-in page with its cookie.
+  let playing = null;
+  function singer(text) {
+    const b = el("button", "singer"); b.type = "button"; b.title = "Sing it"; b.setAttribute("aria-label", "Sing this message");
+    const i = el("img"); i.src = "/static/logos/chimera.png"; i.alt = ""; b.append(i);
+    b.onclick = async () => {
+      if (playing) { playing.audio.pause(); playing.btn.classList.remove("singing", "loading"); const was = playing.btn; playing = null; if (was === b) return; }
+      b.classList.add("loading");
+      try {
+        const link = root.dataset.rpc.startsWith("/mcp/") ? root.dataset.rpc.slice(5) : "";
+        const r = await fetch("/sing", { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, link ? { "x-link": link } : {}), body: JSON.stringify({ text }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "The voice is busy. Try again.");
+        const audio = new Audio(URL.createObjectURL(await r.blob()));
+        playing = { audio, btn: b };
+        b.classList.remove("loading"); b.classList.add("singing");
+        audio.onended = () => { b.classList.remove("singing"); if (playing && playing.btn === b) playing = null; };
+        await audio.play();
+      } catch (err) {
+        b.classList.remove("loading", "singing");
+        $("chat-banner").hidden = false; $("chat-banner-text").textContent = err.message;
+      }
+    };
+    return b;
+  }
+
   const project = () => S.projects.find((p) => p.project_id === S.pid);
   // The developer by name: "waseem" -> "Waseem". Server notes say "the developer".
   const dev = () => { const d = (project() || {}).developer || ""; return d ? d.charAt(0).toUpperCase() + d.slice(1) : "the developer"; };
@@ -219,7 +245,7 @@ document.addEventListener("submit", (e) => {
       if (S.seen.has(e.seq)) continue;
       S.seen.add(e.seq);
       let n;
-      if (e.actor === "human") { n = el("div", "msg me"); n.append(rich(e.text), files(e.attachments)); }
+      if (e.actor === "human") { n = el("div", "msg me"); n.append(singer(e.text), rich(e.text), files(e.attachments)); }
       else if (e.actor === "agent") {
         n = el("div", "msg agent");
         const who = el("div", "who"), lg = agentLogo(e.name); if (lg) who.append(lg);

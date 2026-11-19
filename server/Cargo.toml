@@ -28,6 +28,9 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 maud = { version = "0.27", features = ["axum"] }
 url = "2"
 urlencoding = "2"
+# CHIMERA (MIT): the physical-model voice that sings a tester's message in the chat.
+chimera = { git = "https://github.com/jamesondh/chimera-vocal-synth", rev = "c6147d0198890475dbe8a65a0bb8f56240c539b7" }
+flate2 = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
