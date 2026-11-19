@@ -92,9 +92,39 @@ fn cmd(lines: &[&str]) -> Markup {
     html! {
         div.code.copyable {
             @for l in lines { span.ln { (l) } }
-            button.btn.small.copy type="button" data-copy=(lines.join("\n")) { "Copy" }
+            button.btn.small.copy type="button" data-copy=(lines.join("\n")) { (ic("copy")) "Copy" }
         }
     }
+}
+
+/// A button icon (Lucide shapes), stroked in the text colour.
+fn ic(name: &str) -> Markup {
+    let d = match name {
+        "log-out" => r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#,
+        "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
+        "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
+        "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
+        "arrow-right" => r#"<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>"#,
+        "copy" => r#"<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>"#,
+        "mail" => r#"<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>"#,
+        "plug" => r#"<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>"#,
+        "user-plus" => r#"<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>"#,
+        "user-minus" => r#"<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/>"#,
+        "eye" => r#"<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>"#,
+        "zap" => r#"<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>"#,
+        "pause" => r#"<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>"#,
+        "shield" => r#"<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>"#,
+        "x" => r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#,
+        "check" => r#"<path d="M20 6 9 17l-5-5"/>"#,
+        "link" => r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>"#,
+        "trash" => r#"<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#,
+        "rotate" => r#"<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>"#,
+        "upload" => r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>"#,
+        "key" => r#"<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>"#,
+        "send" => r#"<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>"#,
+        _ => "",
+    };
+    maud::PreEscaped(format!(r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{d}</svg>"#))
 }
 
 fn orb(class: &str) -> Markup {
@@ -208,9 +238,9 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                         div.row {
                             @if let Some(a) = acct {
                                 span.muted style="font-size:14px" { (a.label()) }
-                                form.inline method="post" action="/logout" { button.btn.small type="submit" { "Sign out" } }
+                                form.inline method="post" action="/logout" { button.btn.small.tertiary type="submit" { (ic("log-out")) "Sign out" } }
                             } @else {
-                                a.btn.primary.small href="/login" { "Console" }
+                                a.btn.primary.small href="/login" { (ic("terminal")) "Console" }
                             }
                         }
                     }
@@ -231,7 +261,7 @@ fn csrf(a: &Account) -> Markup {
 
 pub fn error_page(title: &str, msg: &str) -> Html<String> {
     Html(layout(title, None, None, html! {
-        div.narrow style="padding:64px 0" { div.card { h1 { (title) } p.muted { (msg) } a.btn href="/" { "Back to Substrate" } } }
+        div.narrow style="padding:64px 0" { div.card { h1 { (title) } p.muted { (msg) } a.btn href="/" { (ic("arrow-left")) "Back to Substrate" } } }
     }).into_string())
 }
 
@@ -256,7 +286,7 @@ fn landing() -> Html<String> {
             p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant." }
             div.between style="padding-top:8px" {
                 div.row {
-                    a.btn.primary href="/login" { "Console" }
+                    a.btn.primary href="/login" { (ic("terminal")) "Console" }
                     a.btn href="/auth/gliph" { (gliph_mark(18)) "Sign in with Gliph" }
                 }
                 a.muted href="#connect" style="text-decoration:none;font-size:14px" { (gliph_mark(18)) " Use it from a Gliph channel" }
@@ -300,7 +330,7 @@ fn landing() -> Html<String> {
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
             div.card {
                 h3 { "Connect an assistant" }
-                div.code.copyable { "https://substrate.gliph.sh/mcp" button.btn.small.copy type="button" data-copy="https://substrate.gliph.sh/mcp" { "Copy" } }
+                div.code.copyable { "https://substrate.gliph.sh/mcp" button.btn.small.copy type="button" data-copy="https://substrate.gliph.sh/mcp" { (ic("copy")) "Copy" } }
                 span.muted { "In Claude, add it as a custom connector and sign in once. In ChatGPT, turn on developer mode and create an app with it." }
             }
             div.card {
@@ -337,7 +367,7 @@ pub fn login_page(_app: &AppInner, next: &str, err: Option<&str>) -> Html<String
                     input type="hidden" name="next" value=(next);
                     div.field { label for="email" { "Email" } input id="email" type="email" name="email" required autocomplete="email" placeholder="you@company.com"; }
                     div.row.pair {
-                        button.btn.primary type="submit" { "Send sign-in link" }
+                        button.btn.primary type="submit" { (ic("mail")) "Send sign-in link" }
                         a.btn href=(format!("/auth/gliph?next={}", urlencoding::encode(&next))) { (gliph_mark(18)) "Sign in with Gliph" }
                     }
                 }
@@ -361,7 +391,7 @@ pub fn magic_confirm_page(t: &str) -> Html<String> {
         div.narrow style="padding:64px 0" class="stack" {
             div.card {
                 h1 { "Finish signing in" }
-                form method="post" action="/auth/magic" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { "Sign in" } }
+                form method="post" action="/auth/magic" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { (ic("log-in")) "Sign in" } }
             }
         }
     }).into_string())
@@ -391,7 +421,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         div.stack style="padding:12px 0 48px" {
             div.between style="padding:8px 4px 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
-                div.row { a.btn href="/connect" { "Connect an assistant" } }
+                div.row { a.btn href="/connect" { (ic("plug")) "Connect an assistant" } }
             }
             @if !approvals.is_empty() {
                 div.card.glow {
@@ -513,7 +543,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     h3 { "Invitation link" }
                     p.muted { "Send this to your tester. You see it only once." }
                     div.secret { (format!("{}/i/{}", app.cfg.public_url, secret)) }
-                    div.row { button.btn.small type="button" data-copy=(format!("{}/i/{}", app.cfg.public_url, secret)) { "Copy link" } }
+                    div.row { button.btn.small type="button" data-copy=(format!("{}/i/{}", app.cfg.public_url, secret)) { (ic("copy")) "Copy link" } }
                 }
             }
             div.between style="padding:8px 4px" {
@@ -522,14 +552,14 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "none" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
                 } }
                 @if owner {
-                    div.row { a.btn href="#invite" { "Invite a tester" } }
+                    div.row { a.btn href="#invite" { (ic("user-plus")) "Invite a tester" } }
                 }
             }
             @if owner && pending > 0 {
                 div.card.glow {
                     div.between {
                         div { div.row style="font-size:19px;font-weight:500" { "Needs approval " span.badge { (pending) } } @if held > 0 { div.muted style="font-size:14px" { (held) " held by a risk flag." } } }
-                        a.btn.primary href="#conversations" { "Review" }
+                        a.btn.primary href="#conversations" { (ic("eye")) "Review" }
                     }
                 }
             }
@@ -554,7 +584,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                 div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
                                 div style="font-size:26px;font-weight:500;letter-spacing:-.02em" { "Auto relay is on" }
                                 p style="color:#E4D9C4;margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
-                                form method="post" action=(format!("/p/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { "Turn off auto relay" } }
+                                form method="post" action=(format!("/p/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { (ic("pause")) "Turn off auto relay" } }
                             }
                         } @else {
                             section.card {
@@ -565,7 +595,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                     label.sr for="minutes" { "Duration" }
                                     select id="minutes" name="minutes" style="width:auto" { option value="60" { "for 1 hour" } option value="480" selected { "for 8 hours" } option value="0" { "until I turn it off" } }
                                     input type="hidden" name="confirm" value="yes";
-                                    button.btn type="submit" { "Turn on auto relay" }
+                                    button.btn type="submit" { (ic("zap")) "Turn on auto relay" }
                                 }
                             }
                         }
@@ -579,8 +609,8 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                         span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { (role) @if *trusted { " · may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
-                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { @if *trusted { "Untrust" } @else { "Trust" } } }
-                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { "Remove" } }
+                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
+                                                form.inline method="post" action=(format!("/p/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
                                             }
                                         }
                                     }
@@ -611,14 +641,14 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.field { label for="label" { "Tester's name" } input id="label" type="text" name="label" placeholder="Sarah" maxlength="64"; }
                             div.field { label for="days" { "Expires" } select id="days" name="days" { option value="1" { "in 1 day" } option value="7" { "in 7 days" } option value="14" selected { "in 14 days" } option value="30" { "in 30 days" } } }
                             div.field { label for="uses" { "Uses" } select id="uses" name="max_uses" { option value="1" selected { "one person" } option value="5" { "up to 5 people" } option value="25" { "up to 25 people" } } }
-                            button.btn.primary type="submit" { "Create link" }
+                            button.btn.primary type="submit" { (ic("link")) "Create link" }
                         }
                         @if !invites.is_empty() {
                             div.stack {
                                 @for (iid, label, uses, max, exp) in &invites {
                                     div.inset.between {
                                         span { (if label.is_empty() { "invitation" } else { label }) span.faint style="font-size:13px" { " · " (uses) "/" (max) " used · expires " (exp.format("%b %d")) } }
-                                        form.inline method="post" action=(format!("/p/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { "Revoke" } }
+                                        form.inline method="post" action=(format!("/p/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } }
                                     }
                                 }
                             }
@@ -632,12 +662,12 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.field { label for="desc" { "Description for testers" } textarea id="desc" name="description" maxlength="500" { (p.description) } }
                             div.field { label for="hosts" { "Hosts for retest links, comma-separated" } input id="hosts" type="text" name="retest_hosts" value=(p.retest_hosts) placeholder="verna.app, staging.verna.app"; }
                             label.row style="color:var(--text-2);font-size:14px" { input type="checkbox" name="ci_public" value="1" checked[p.ci_public]; "Show CI links to testers" }
-                            button.btn type="submit" { "Save" }
+                            button.btn type="submit" { (ic("check")) "Save" }
                         }
                         div.inset style="font-size:13px" {
                             "Gliph channel: "
                             @if p.gliph_channel.is_empty() { span.muted { "not linked. In a Gliph channel, run " span.mono { "/invite substrate" } ", then " span.mono { "/substrate link " (p.handle) } } }
-                            @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/p/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small type="submit" { "Unlink" } } }
+                            @else { span.tag.ok { "linked" } form.inline method="post" action=(format!("/p/{pid}/unlink-gliph")) { (csrf(&a)) " " button.btn.small.tertiary type="submit" { (ic("x")) "Unlink" } } }
                         }
                     }
                 }
@@ -824,7 +854,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                             h3 { "Answer the agent's question" }
                             label.sr for="answer" { "Your answer" }
                             textarea id="answer" name="text" required maxlength="8000" {}
-                            div.row { button.btn.primary type="submit" { "Send answer" } }
+                            div.row { button.btn.primary type="submit" { (ic("send")) "Send answer" } }
                         }
                     }
                 }
@@ -892,13 +922,13 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                         p.muted style="margin:0;font-size:14px" { "Your agent gets this text:" }
                         div.envelope { (envelope_markup(&m.envelope)) }
                         div.row {
-                            form.inline method="post" action=(format!("/m/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { "Approve" } }
-                            form.inline method="post" action=(format!("/m/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { "Reject" } }
+                            form.inline method="post" action=(format!("/m/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { (ic("check")) "Approve" } }
+                            form.inline method="post" action=(format!("/m/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
                         }
                     } }
                     @if owner && open { @if let Some(m) = m {
-                        @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/m/{}/cancel", m.id)) { (csrf(a)) button.btn.small type="submit" { "Cancel delivery" } } }
-                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? The agent may get it twice." { (csrf(a)) button.btn.small type="submit" { "Deliver again" } } }
+                        @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/m/{}/cancel", m.id)) { (csrf(a)) button.btn.small.tertiary type="submit" { (ic("x")) "Cancel delivery" } } }
+                        @if matches!(m.stage.as_str(), "uncertain" | "failed" | "interrupted" | "expired") { form.inline method="post" action=(format!("/m/{}/retry", m.id)) data-confirm="Deliver it again? The agent may get it twice." { (csrf(a)) button.btn.small type="submit" { (ic("rotate")) "Deliver again" } } }
                     } }
                 }
             }
@@ -927,7 +957,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
                 div.body { (text) }
                 @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/a/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) } } } }
                 @if e.held && owner {
-                    form method="post" action=(format!("/c/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this reply to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { "Release to tester" } }
+                    form method="post" action=(format!("/c/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this reply to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { (ic("eye")) "Release to tester" } }
                 }
             }
         },
@@ -1102,7 +1132,7 @@ pub async fn upload_get(State(app): State<App>, Path(t): Path<String>) -> Result
             form.card method="post" enctype="multipart/form-data" {
                 label for="f" { "Files" }
                 input id="f" type="file" name="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,.md,.log,.txt" required;
-                button.btn.primary type="submit" { "Upload" }
+                button.btn.primary type="submit" { (ic("upload")) "Upload" }
             }
             @if !done.is_empty() { div.card { h3 { "Uploaded" } @for n in &done { div.inset { (n) } } } }
         }
@@ -1154,9 +1184,9 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
             @if dead {
                 div.card.danger { h3 { "This invitation can't be used" } p.muted { "It expired, was revoked, or has been used. Ask " (owner_name) " for a new one." } }
             } @else if already {
-                div.card { h3 { "You're in" } p.muted { "You already have access to " (name) "." } a.btn.primary href="/connect" { "Connect your assistant" } }
+                div.card { h3 { "You're in" } p.muted { "You already have access to " (name) "." } a.btn.primary href="/connect" { (ic("plug")) "Connect your assistant" } }
             } @else if let Some(a) = &acct {
-                form.card method="post" { (csrf(a)) div.row { span.badge { "1" } h3 { "Accept as " (a.email) } } button.btn.primary type="submit" { "Accept invitation" } }
+                form.card method="post" { (csrf(a)) div.row { span.badge { "1" } h3 { "Accept as " (a.email) } } button.btn.primary type="submit" { (ic("check")) "Accept invitation" } }
             } @else {
                 div.card {
                     div.row { span.badge { "1" } h3 { "Accept with your email" } }
@@ -1164,7 +1194,7 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
                         input type="hidden" name="next" value=(format!("/i/{t}"));
                         label.sr for="em" { "Email" }
                         input id="em" type="email" name="email" required placeholder="you@example.com" style="flex:1 1 240px;width:auto";
-                        button.btn.primary type="submit" { "Send sign-in link" }
+                        button.btn.primary type="submit" { (ic("mail")) "Send sign-in link" }
                     }
                     a href=(format!("/auth/gliph?next=/i/{t}")) class="row" style="font-size:14px;color:#BFC8FF;text-decoration:none" { (gliph_mark(18)) "Already on Gliph? Sign in with Gliph" }
                 }
@@ -1185,7 +1215,7 @@ fn assistant_steps(app: &AppInner) -> Markup {
                 div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/openai.svg" alt=""; "ChatGPT" } span.muted style="font-size:13px" { "Settings › Apps › Advanced settings › Developer mode, then create an app with this address. Business, Enterprise and Edu have it after an admin turns it on. Some Plus and Pro accounts have it too." } }
                 div.inset.stack { div.row style="font-weight:500" { img.logo.lg src="/static/logos/copilot.svg" alt=""; "Other clients" } span.muted style="font-size:13px" { "Claude Code: " span.mono { "claude mcp add --transport http substrate " (url) } ". Others: OAuth, or a personal token from " a href="/connect" { "Connect" } "." } }
             }
-            div.row { span.code style="flex:1 1 280px" { (url) } button.btn type="button" data-copy=(url) { "Copy" } }
+            div.row { span.code style="flex:1 1 280px" { (url) } button.btn type="button" data-copy=(url) { (ic("copy")) "Copy" } }
         }
         div.card {
             div.row { span.badge { "3" } h3 { "Say it like you would to a person" } }
@@ -1222,10 +1252,10 @@ pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<Flas
             div.card {
                 h3 { "Personal token" }
                 p.muted style="margin:0" { "For clients that can't sign in with OAuth. Send it as " span.mono { "Authorization: Bearer <token>" } ". It expires in 90 days." }
-                @if let Some(t) = &f.invite { div.secret { (t) } div.row { button.btn.small type="button" data-copy=(t) { "Copy token" } span.faint style="font-size:13px" { "Shown once." } } }
-                form method="post" action="/connect/token" class="row" { (csrf(&a)) label.sr for="tl" { "Label" } input id="tl" type="text" name="label" placeholder="Label, e.g. Claude Code on laptop" style="flex:1 1 240px;width:auto" maxlength="64"; button.btn type="submit" { "Create token" } }
+                @if let Some(t) = &f.invite { div.secret { (t) } div.row { button.btn.small type="button" data-copy=(t) { (ic("copy")) "Copy token" } span.faint style="font-size:13px" { "Shown once." } } }
+                form method="post" action="/connect/token" class="row" { (csrf(&a)) label.sr for="tl" { "Label" } input id="tl" type="text" name="label" placeholder="Label, e.g. Claude Code on laptop" style="flex:1 1 240px;width:auto" maxlength="64"; button.btn type="submit" { (ic("key")) "Create token" } }
                 @for (h, label, exp) in &tokens {
-                    div.inset.between { span { (if label.is_empty() { "token" } else { label }) span.faint { " · expires " (exp.format("%b %d")) } } form.inline method="post" action=(format!("/connect/token/{}/revoke", &h[..16])) { (csrf(&a)) button.btn.small.danger type="submit" { "Revoke" } } }
+                    div.inset.between { span { (if label.is_empty() { "token" } else { label }) span.faint { " · expires " (exp.format("%b %d")) } } form.inline method="post" action=(format!("/connect/token/{}/revoke", &h[..16])) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } } }
                 }
             }
         }
@@ -1277,8 +1307,8 @@ pub fn consent_page(a: &Account, client: &str, q: &AuthorizeQ, projects: &[(Stri
                     @for (k, v) in [("response_type", &q.response_type), ("client_id", &q.client_id), ("redirect_uri", &q.redirect_uri), ("state", &q.state), ("code_challenge", &q.code_challenge), ("code_challenge_method", &q.code_challenge_method), ("scope", &q.scope), ("resource", &q.resource)] {
                         input type="hidden" name=(k) value=(v);
                     }
-                    button.btn.primary type="submit" name="decision" value="allow" { "Allow" }
-                    button.btn type="submit" name="decision" value="deny" { "Cancel" }
+                    button.btn.primary type="submit" name="decision" value="allow" { (ic("check")) "Allow" }
+                    button.btn.tertiary type="submit" name="decision" value="deny" { (ic("x")) "Cancel" }
                 }
             }
         }
@@ -1307,13 +1337,13 @@ pub async fn pair_get(State(app): State<App>, User(a): User, Query(q): Query<Pai
                         div.secret style="font-size:22px;text-align:center;letter-spacing:.2em" { (code) }
                         p.muted style="margin:0" { "Approve only if this code matches the one in your terminal." }
                         form method="post" class="row" { (csrf(&a)) input type="hidden" name="code" value=(code);
-                            button.btn.primary type="submit" name="decision" value="approve" { "Approve" }
-                            button.btn type="submit" name="decision" value="deny" { "Deny" } }
+                            button.btn.primary type="submit" name="decision" value="approve" { (ic("check")) "Approve" }
+                            button.btn type="submit" name="decision" value="deny" { (ic("x")) "Deny" } }
                     }
                 }
                 Some(_) => { div.card { p.muted { "This code was already used. Run " span.mono { "substrate login" } " again for a new one." } } }
                 None => {
-                    form.card method="get" { label for="code" { "Code from your terminal" } input id="code" type="text" name="code" placeholder="BCDF-GHJK" autocomplete="off"; button.btn.primary type="submit" { "Continue" } }
+                    form.card method="get" { label for="code" { "Code from your terminal" } input id="code" type="text" name="code" placeholder="BCDF-GHJK" autocomplete="off"; button.btn.primary type="submit" { (ic("arrow-right")) "Continue" } }
                 }
             }
         }
@@ -1355,7 +1385,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                 div.card {
                     div.between {
                         div.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} h3 { (name) } span.faint { (platform) " · relay " (version) } }
-                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { "Sign out" } }
+                        form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Sign this computer out? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("log-out")) "Sign out" } }
                     }
                     span.muted style="font-size:13px" { @if app.machine_online(mid) { "Online now." } @else if let Some(s) = seen { "Last seen " (ago(s)) " ago." } @else { "Never connected." } }
                     @if let Some(list) = panes.as_array() { @if !list.is_empty() {

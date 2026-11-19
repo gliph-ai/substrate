@@ -31,9 +31,11 @@ document.addEventListener("click", (e) => {
   const c = e.target.closest("[data-copy]");
   if (c) {
     navigator.clipboard?.writeText(c.getAttribute("data-copy"));
-    const t = c.textContent;
-    c.textContent = "Copied";
-    setTimeout(() => (c.textContent = t), 1400);
+    // Only the label changes; the icon before it stays.
+    const label = c.lastChild;
+    const t = label.textContent;
+    label.textContent = "Copied";
+    setTimeout(() => (label.textContent = t), 1400);
   }
 });
 
