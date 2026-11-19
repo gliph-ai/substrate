@@ -81,6 +81,7 @@ pub fn router(app: App) -> Router {
         // developer + tester pages
         .route("/p/{pid}", get(web::project_page))
         .route("/p/{pid}/live", get(web::project_live))
+        .route("/p/{pid}/icon", get(web::project_icon_file))
         .route("/p/{pid}/mode", post(web::project_mode))
         .route("/p/{pid}/settings", post(web::project_settings))
         .route("/p/{pid}/invites", post(web::invite_create))
@@ -126,6 +127,7 @@ pub fn router(app: App) -> Router {
         .route("/relay/api/projects/{handle}/bind", post(relay::api_bind))
         .route("/relay/api/projects/{handle}/unbind", post(relay::api_unbind))
         .route("/relay/api/projects/{handle}/mode", post(relay::api_mode))
+        .route("/relay/api/projects/{handle}/icon", post(relay::api_icon))
         .route("/relay/api/approvals", get(relay::api_approvals))
         .route("/relay/api/inbox", get(relay::api_inbox))
         .route("/relay/api/messages/{mid}/{action}", post(relay::api_decide))

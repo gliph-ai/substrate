@@ -85,6 +85,17 @@ impl Api {
         Ok(v["attachment_id"].as_str().unwrap_or_default().to_string())
     }
 
+    /// Upload a project's logo (PNG/JPEG bytes).
+    pub async fn icon(&self, handle: &str, bytes: Vec<u8>) -> Result<()> {
+        let (tok, _) = self.access(false).await?;
+        let r = self.http.post(format!("{}/relay/api/projects/{handle}/icon", self.server)).bearer_auth(tok).body(bytes).send().await?;
+        if !r.status().is_success() {
+            let v: Value = r.json().await.unwrap_or(json!({}));
+            bail!("{}", v["error"].as_str().unwrap_or("icon upload failed"));
+        }
+        Ok(())
+    }
+
     pub async fn download(&self, url: &str) -> Result<Vec<u8>> {
         if !url.starts_with(&self.server) {
             bail!("refusing to download from outside {}", self.server);

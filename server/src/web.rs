@@ -57,6 +57,30 @@ fn logo(name: Option<&str>, alt: &str) -> Markup {
     html! { @if let Some(n) = name { img.logo src=(format!("/static/logos/{n}.svg")) alt=(alt) width="18" height="18"; } }
 }
 
+/// A project's own logo (found by the relay, like Sidra's tab icons), or a
+/// lettered tile in its place, so every project is recognisable at a glance.
+pub fn picon(id: &str, name: &str, etag: &str, size: u32) -> Markup {
+    let style = format!("width:{size}px;height:{size}px");
+    html! {
+        @if etag.is_empty() {
+            span.picon.tile style=(format!("{style};font-size:{}px", size * 9 / 20)) aria-hidden="true" { (initials(name).chars().next().unwrap_or('?')) }
+        } @else {
+            img.picon src=(format!("/p/{id}/icon?v={etag}")) alt="" width=(size) height=(size) style=(style);
+        }
+    }
+}
+
+pub async fn project_icon_file(State(app): State<App>, Path(pid): Path<String>) -> Result<Response, Fail> {
+    let row: Option<(Option<Vec<u8>>, String)> = sqlx::query_as("SELECT icon, icon_mime FROM projects WHERE id=$1").bind(&pid).fetch_optional(&app.db).await?;
+    match row {
+        Some((Some(bytes), mime)) if !mime.is_empty() => Ok((
+            [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=86400".to_string())],
+            bytes,
+        ).into_response()),
+        _ => Err(Fail::new(404, "no icon")),
+    }
+}
+
 fn orb(class: &str) -> Markup {
     html! { span class=(format!("orb {class}")) aria-hidden="true" {} }
 }
@@ -330,8 +354,8 @@ pub fn magic_confirm_page(t: &str) -> Html<String> {
 
 async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     let owned = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
-    let testing: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT p.id, p.name, acc.email FROM members m JOIN projects p ON p.id=m.project_id JOIN accounts acc ON acc.id=p.owner_id WHERE m.account_id=$1 AND m.role='tester' ORDER BY p.name",
+    let testing: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT p.id, p.name, acc.email, p.icon_etag FROM members m JOIN projects p ON p.id=m.project_id JOIN accounts acc ON acc.id=p.owner_id WHERE m.account_id=$1 AND m.role='tester' ORDER BY p.name",
     ).bind(&a.id).fetch_all(&app.db).await?;
     let approvals = sqlx::query_as::<_, Message>(
         "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.order_n",
@@ -385,7 +409,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                             div.label { "Your projects" }
                             @for p in &owned {
                                 a.item href=(format!("/p/{}", p.id)) {
-                                    span.l { span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } }
+                                    span.l { (picon(&p.id, &p.name, &p.icon_etag, 28)) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) }
                                     span.r { (state_label(&p.state)) " · " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
                                 }
                             }
@@ -407,7 +431,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                     @if !testing.is_empty() {
                         div.list {
                             div.label { "Projects you test" }
-                            @for (pid, name, owner) in &testing { a.item href=(format!("/p/{pid}")) { span.l { (name) } span.r { (owner) } } }
+                            @for (pid, name, owner, etag) in &testing { a.item href=(format!("/p/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
                         }
                     }
                     div.list {
@@ -476,10 +500,10 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 }
             }
             div.between style="padding:8px 4px" {
-                div {
+                div.row style="gap:16px;align-items:center" { (picon(&p.id, &p.name, &p.icon_etag, 56)) div {
                     h1 { (p.name) }
                     div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "—" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
-                }
+                } }
                 @if owner {
                     div.row { a.btn href="#invite" { "Invite a tester" } }
                 }
@@ -768,7 +792,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
 
     Ok(Html(layout(&title, Some(&a), Some(format!("/c/{cid}/live")), html! {
         div.between style="padding:4px 0 16px" {
-            div.crumbs { a href=(format!("/p/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
+            div.crumbs { (picon(&p.id, &p.name, &p.icon_etag, 24)) a href=(format!("/p/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
             div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} (machine.clone().unwrap_or_else(|| "no machine".into())) @if online { " online" } @else { " offline" } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
         }
         div.split style="padding-bottom:48px" {
@@ -803,7 +827,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                 div.card {
                     span.muted style="font-size:13px" { "Route" }
                     dl.kv {
-                        dt { "Project" } dd { (p.name) }
+                        dt { "Project" } dd.row style="gap:8px" { (picon(&p.id, &p.name, &p.icon_etag, 18)) (p.name) }
                         dt { "Machine" } dd { (machine.unwrap_or_else(|| "none".into())) }
                         dt { "Pane" } dd.mono { (if p.pane_id.is_empty() { "—".to_string() } else { p.pane_id.clone() }) }
                         dt { "Agent" } dd { (logo(agent_logo(&p.agent), "")) " " (agent_label(&p.agent)) }
@@ -1105,6 +1129,7 @@ pub async fn invite_get(State(app): State<App>, headers: HeaderMap, Path(t): Pat
     Ok(Html(layout("Invitation", acct.as_ref(), None, html! {
         div.page-horizon {}
         div.narrow style="padding:40px 0 180px" class="stack" {
+            (picon(&p.id, &p.name, &p.icon_etag, 72))
             h1 style="font-size:clamp(34px,5vw,46px)" { (owner_name) " invited you to test " span.grad { (name) } "." }
             @if !p.description.is_empty() { p.lead { (p.description) } }
             p.lead { "Tell your own AI assistant what you find. It passes your words to the agent building " (name) ", and tells you when a fix is ready to try." }

@@ -122,6 +122,8 @@ enum ProjectCmd {
     Bind { handle: String, pane: String },
     /// Stop delivering to any pane. Messages stay queued.
     Unbind { handle: String },
+    /// Find the project's logo in its folder again (or use --file) and upload it.
+    Icon { handle: String, #[arg(long)] file: Option<String> },
     /// approve: every message waits for you. auto: relay without approval.
     Mode {
         handle: String,
@@ -310,12 +312,21 @@ async fn run() -> Result<()> {
                 api.call("POST", "/relay/api/projects", Some(json!({"handle": handle, "name": name.unwrap_or_default(), "pane_id": p.pane_id,
                     "agent_session": p.agent_session, "agent": p.agent, "cwd": p.cwd}))).await?;
                 println!("Created {handle}, bound to {} ({} in {}). New projects require approval for every message.", p.pane_id, p.agent, p.cwd);
+                upload_icon(&api, &handle, &p.cwd, None).await;
                 println!("Invite testers from {}/", cfg.server);
             }
             ProjectCmd::Bind { handle, pane } => {
                 let p = find_pane(&pane)?;
                 api.call("POST", &format!("/relay/api/projects/{handle}/bind"), Some(json!({"pane_id": p.pane_id, "agent_session": p.agent_session, "agent": p.agent, "cwd": p.cwd}))).await?;
                 println!("{handle} now delivers to {} ({}).", p.pane_id, p.agent);
+                upload_icon(&api, &handle, &p.cwd, None).await;
+            }
+            ProjectCmd::Icon { handle, file } => {
+                let cwd = api.call("GET", "/relay/api/projects", None).await?["projects"].as_array().into_iter().flatten()
+                    .find(|p| p["handle"] == handle.as_str()).and_then(|p| p["cwd"].as_str().map(String::from)).unwrap_or_default();
+                if !upload_icon(&api, &handle, &cwd, file.as_deref()).await {
+                    bail!("no logo found; pass --file <png>");
+                }
             }
             ProjectCmd::Unbind { handle } => {
                 api.call("POST", &format!("/relay/api/projects/{handle}/unbind"), None).await?;
@@ -410,6 +421,20 @@ async fn run() -> Result<()> {
         Cmd::Doctor => doctor(&paths, &cfg, &api).await,
     }
     Ok(())
+}
+
+/// Find (or read) the project's logo and upload it. Never fails the command
+/// that called it: a project without a logo gets a lettered tile.
+async fn upload_icon(api: &Api, handle: &str, cwd: &str, file: Option<&str>) -> bool {
+    let bytes = match file {
+        Some(f) => std::fs::read(f).ok(),
+        None => substrate_cli::icon::detect(cwd),
+    };
+    let Some(bytes) = bytes else { return false };
+    match api.icon(handle, bytes).await {
+        Ok(()) => { println!("Found the project's logo and set it as its icon."); true }
+        Err(e) => { eprintln!("substrate: icon not set: {e}"); false }
+    }
 }
 
 fn cli_cmd_name() -> &'static str {

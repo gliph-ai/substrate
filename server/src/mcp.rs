@@ -155,6 +155,7 @@ async fn my_message(app: &AppInner, account: &str, mid: &str) -> Result<(Message
 
 fn project_json(app: &AppInner, p: &Project, role: &str, owner: &str) -> Value {
     json!({"project_id": p.id, "name": p.name, "description": p.description, "developer": owner,
+        "icon_url": if p.icon_etag.is_empty() { Value::Null } else { json!(format!("{}/p/{}/icon?v={}", app.cfg.public_url, p.id, p.icon_etag)) },
         "agent": agent_label(&p.agent), "agent_online": app.machine_online(&p.machine_id),
         "agent_state": p.state, "your_role": role,
         "approval": if p.auto_active() { "auto relay: messages go to the agent without manual approval" } else { "the developer approves each message" }})

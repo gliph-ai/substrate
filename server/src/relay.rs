@@ -513,7 +513,7 @@ pub async fn api_projects(State(app): State<App>, headers: HeaderMap) -> Result<
     let mut out = vec![];
     for p in ps {
         let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&p.id).fetch_one(&app.db).await?;
-        out.push(json!({"id": p.id, "handle": p.handle, "name": p.name, "machine_id": p.machine_id, "pane_id": p.pane_id,
+        out.push(json!({"id": p.id, "handle": p.handle, "name": p.name, "machine_id": p.machine_id, "pane_id": p.pane_id, "cwd": p.cwd, "has_icon": !p.icon_etag.is_empty(),
             "agent": p.agent, "state": p.state, "mode": if p.auto_active() { "auto" } else { "approve" }, "auto_until": p.auto_until, "pending": pending,
             "gliph_channel": p.gliph_channel}));
     }
@@ -615,6 +615,26 @@ pub async fn api_mode(State(app): State<App>, headers: HeaderMap, Path(handle): 
     let p = owned_by_handle(&app, &account, &handle).await?;
     set_mode(&app, &account, &p, &m.mode, m.minutes, "cli").await?;
     Ok(Json(json!({"ok": true})))
+}
+
+/// The project's own logo, found by the relay in the project folder (the
+/// candidates Sidra uses for its tabs) and shrunk to 128 px there. PNG or
+/// JPEG only, sniffed from the bytes, 512 KB at most.
+pub async fn api_icon(State(app): State<App>, headers: HeaderMap, Path(handle): Path<String>, body: Bytes) -> Result<Json<Value>, Fail> {
+    let (account, _) = machine_auth(&app, &headers).await?;
+    let p = owned_by_handle(&app, &account, &handle).await?;
+    if body.is_empty() || body.len() > 512 * 1024 {
+        return Err(Fail::new(413, "an icon is between 1 byte and 512 KB"));
+    }
+    let mime = match crate::files::sniff(&body, "icon") {
+        Some(m @ ("image/png" | "image/jpeg")) => m,
+        _ => return Err(Fail::new(415, "an icon is a PNG or JPEG")),
+    };
+    let etag = crate::app::hash(&hex::encode(&body))[..16].to_string();
+    sqlx::query("UPDATE projects SET icon=$2, icon_mime=$3, icon_etag=$4 WHERE id=$1")
+        .bind(&p.id).bind(body.to_vec()).bind(mime).bind(&etag).execute(&app.db).await?;
+    audit(&app, &account, &p.id, &handle, "project.icon", &p.id, &format!("{} bytes", body.len())).await;
+    Ok(Json(json!({"ok": true, "etag": etag})))
 }
 
 pub async fn api_approvals(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Fail> {

@@ -5,4 +5,5 @@ pub mod config;
 pub mod daemon;
 pub mod deploy;
 pub mod herdr;
+pub mod icon;
 pub mod launchd;

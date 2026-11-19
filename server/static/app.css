@@ -169,3 +169,8 @@ table.audit tr:nth-child(odd) td { background: var(--card); }
 table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last-child { border-radius: 0 10px 10px 0; }
 .scroll-x { overflow-x: auto; }
 @media (max-width: 640px) { .wrap, .narrow { padding: 0 16px; } .card { padding: 16px; } .stage { min-height: 520px; } }
+
+/* project icons: the project's own logo (found by the relay), or a lettered tile */
+.picon { display: inline-flex; flex: none; border-radius: 22%; object-fit: cover; background: var(--card-2); }
+.picon.tile { align-items: center; justify-content: center; font-weight: 600; color: #fff;
+  background: linear-gradient(135deg, #3B5BFF, #7B2CFF 60%, #C04BFF); }

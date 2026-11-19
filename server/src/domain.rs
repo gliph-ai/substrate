@@ -29,6 +29,8 @@ pub struct Project {
     pub ci_public: bool,
     pub gliph_channel: String,
     pub created_at: DateTime<Utc>,
+    /// Empty until the relay found the project's own logo (`/p/{id}/icon`).
+    pub icon_etag: String,
 }
 
 impl Project {

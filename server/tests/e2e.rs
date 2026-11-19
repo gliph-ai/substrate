@@ -512,3 +512,28 @@ async fn question_round_trip_and_concurrent_projects() {
     assert_eq!(ans["structuredContent"]["stage"], "pending_approval");
     assert_eq!(t.stage(&mid).await, "answered");
 }
+
+#[tokio::test]
+async fn project_icon_from_the_relay() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRicon".to_vec();
+    // An SVG posing as an icon is refused; a PNG is stored.
+    let r = t.http.post(format!("{}/relay/api/projects/verna/icon", t.base)).bearer_auth(&w.machine).body(b"<svg onload=x>".to_vec()).send().await.unwrap();
+    assert_eq!(r.status(), 415);
+    let r = t.http.post(format!("{}/relay/api/projects/verna/icon", t.base)).bearer_auth(&w.machine).body(png.clone()).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let got = t.http.get(format!("{}/p/{}/icon", t.base, w.pid)).send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/png");
+    assert_eq!(got.bytes().await.unwrap().to_vec(), png);
+    // Testers' assistants get it, and the pages show it.
+    let l = t.mcp(&w.pat, "list_projects", json!({})).await;
+    assert!(l["structuredContent"]["projects"][0]["icon_url"].as_str().unwrap().contains(&format!("/p/{}/icon?v=", w.pid)));
+    let page = t.http.get(format!("{}/p/{}", t.base, w.pid)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains(&format!("src=\"/p/{}/icon?v=", w.pid)));
+    // Only the owner's relay can set it.
+    let other = t.browser("mallory@example.com").await;
+    let m2 = t.pair(&other).await;
+    let r = t.http.post(format!("{}/relay/api/projects/verna/icon", t.base)).bearer_auth(&m2).body(png).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+}
