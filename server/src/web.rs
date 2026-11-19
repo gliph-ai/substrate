@@ -105,6 +105,9 @@ pub(crate) fn ic(name: &str) -> Markup {
         "square-pen" => r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>"#,
         "paperclip" => r#"<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>"#,
         "alert" => r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#,
+        "message" => r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#,
+        "monitor" => r#"<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>"#,
+        "list" => r#"<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>"#,
         "log-in" => r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#,
         "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
         "arrow-left" => r#"<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>"#,
@@ -262,6 +265,18 @@ fn state_label(state: &str) -> &'static str {
     }
 }
 
+/// Which top-nav item a page belongs to, by its title; everything else is the dashboard.
+fn section_of(title: &str) -> &'static str {
+    match title {
+        "Approvals" => "/approvals",
+        "Access links" | "New access link" | "Link created" => "/links",
+        "Machines" => "/machines",
+        "Audit log" => "/audit",
+        "Profile" => "/profile",
+        _ => "/",
+    }
+}
+
 pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: Markup) -> Markup {
     html! {
         (DOCTYPE)
@@ -281,15 +296,14 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                 div.wrap {
                     header.top {
                         div.row style="gap:28px" {
-                            a.brand href="/" { (orb("")) "Substrate" }
+                            // The page you are on is underlined; the wordmark stands for the dashboard.
+                            @let cur = acct.map(|_| section_of(title)).unwrap_or("");
+                            a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { (orb("")) "Substrate" }
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
-                                    a href="/" { "Dashboard" }
-                                    a href="/approvals" { "Approvals" }
-                                    a href="/chat" { "Chat" }
-                                    a href="/links" { "Access links" }
-                                    a href="/machines" { "Machines" }
-                                    a href="/audit" { "Audit log" }
+                                    @for (href, label, icon) in [("/approvals", "Approvals", "check"), ("/chat", "Chat", "message"), ("/links", "Access links", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
+                                        a.on[cur == href] href=(href) aria-current=[(cur == href).then_some("page")] { @if cur == href { (ic(icon)) } (label) }
+                                    }
                                 }
                                 span.sr { (a.email) }
                             } @else {

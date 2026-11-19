@@ -46,8 +46,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .top { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; padding: 18px 0; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; }
 .links { display: flex; flex-wrap: wrap; gap: 22px; font-size: 14px; }
-.links a { color: var(--muted); text-decoration: none; }
+.links a { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .links a:hover { color: var(--text); }
+.links a svg { width: 15px; height: 15px; }
+/* The current page: the menu's electric gradient as an underline, a little below the word. */
+.links a.on, .brand.on { color: var(--text); position: relative; }
+.links a.on::after, .brand.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -9px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, #3B5BFF, #7B2CFF, #C04BFF); box-shadow: 0 0 10px #7B2CFF88; }
+.links a.on svg { color: #A98BFF; }
 .crumbs { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .crumbs .sep { color: #52525B; }
 
