@@ -106,9 +106,9 @@ pub async fn post(State(app): State<App>, headers: HeaderMap, body: axum::body::
 /// permissions (`links::Perms`).
 pub async fn post_link(State(app): State<App>, Path(secret): Path<String>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let Some((account, label, perms)) = crate::links::resolve(&app, &secret).await else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "this access link is not valid; ask the developer for a new one"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "this session link is not valid; ask the developer for a new one"}))).into_response();
     };
-    serve(&app, &headers, &body, &account, &format!("access link: {label}"), Some(perms)).await
+    serve(&app, &headers, &body, &account, &format!("session: {label}"), Some(perms)).await
 }
 
 pub(crate) async fn serve(app: &AppInner, headers: &HeaderMap, body: &[u8], account: &str, client: &str, perms: Option<Perms>) -> Response {
@@ -231,7 +231,7 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             _ => false,
         };
         if denied {
-            return Err(Fail::new(403, "this access link does not allow that; ask the developer"));
+            return Err(Fail::new(403, "this session does not allow that; ask the developer"));
         }
     }
     match name {

@@ -27,22 +27,24 @@
 
 An agent plugin in a linked channel can also write `@<project>`. One agent can send work to another this way.
 
-## Access links
+## Sessions
 
-An access link gives one person access to the panes you pick, with no account
-and no sign-in.
+A session gives one person access to the panes you pick through a single link,
+with no account and no sign-in.
 
-1. Open **Access links** in the console.
+1. Open **Sessions** in the console and select **New session**.
 2. Enter the person's name and pick the panes (projects).
 3. Pick the permissions:
    - read the agent's replies and questions, and answer them
    - see CI and deploy progress and the retest links
    - attach files and download the agent's files
    - skip your approval (flagged messages still wait for you)
+   - ask the agent to deploy to test, or to production
 4. Pick an expiry and select **Create link**.
 5. Copy the link and send it. You see it only once.
 
-The person adds the link as a custom connector with authentication off. In
+The person opens the link in a browser to chat, or adds it as a custom
+connector with authentication off. In
 Claude: Settings › Connectors › Add custom connector. In ChatGPT: Settings ›
 Apps › Advanced settings › Developer mode, then create an app with the link.
 

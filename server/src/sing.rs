@@ -90,7 +90,7 @@ pub async fn sing(State(app): State<App>, headers: HeaderMap, Json(r): Json<Sing
         Some(a) => a.id,
         None => {
             let secret = headers.get("x-link").and_then(|v| v.to_str().ok()).unwrap_or("");
-            crate::links::resolve(&app, secret).await.ok_or_else(|| Fail::new(401, "sign in or use an access link"))?.0
+            crate::links::resolve(&app, secret).await.ok_or_else(|| Fail::new(401, "sign in or use a session link"))?.0
         }
     };
     let text: String = r.text.chars().take(240).collect();

@@ -273,7 +273,7 @@ fn state_label(state: &str) -> &'static str {
 /// Which top-nav item a page belongs to, by its title; everything else is the dashboard.
 fn section_of(title: &str) -> &'static str {
     match title {
-        "Access links" | "New access link" | "Link created" => "/links",
+        "Sessions" | "New session" | "Session created" => "/sessions",
         "Machines" => "/machines",
         "Audit log" => "/audit",
         "Profile" => "/profile",
@@ -305,7 +305,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { (orb("")) "Substrate" }
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
-                                    @for (href, label, icon) in [("/chat", "Chat", "message"), ("/links", "Access links", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
+                                    @for (href, label, icon) in [("/chat", "Chat", "message"), ("/sessions", "Sessions", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
                                         a.on[cur == href] href=(href) aria-current=[(cur == href).then_some("page")] { @if cur == href { (ic(icon)) } (label) }
                                     }
                                 }
@@ -410,8 +410,8 @@ fn landing() -> Html<String> {
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
             div.card {
                 h3 { "Give a tester access" }
-                span.muted { "Create an access link for the panes they may reach, with the permissions you pick. They paste it into Claude or ChatGPT as a custom connector. They need no account." }
-                div.row { a.btn href="/links/new" { (ic("link")) "Create an access link" } }
+                span.muted { "Create a session for the panes they may reach, with the permissions you pick. They open its link in a browser to chat, or paste it into Claude or ChatGPT as a connector. They need no account." }
+                div.row { a.btn href="/sessions/new" { (ic("link")) "Create a session" } }
             }
             div.card {
                 h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
@@ -533,7 +533,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         div.stack style="padding:12px 0 48px" {
             div.between style="padding:8px 0 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
-                div.row { a.btn.primary href="/links/new" { (ic("link")) "New access link" } }
+                div.row { a.btn.primary href="/sessions/new" { (ic("link")) "New session" } }
             }
             @if owned.is_empty() && testing.is_empty() {
                 div.card {
@@ -709,7 +709,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.stack {
                                 @for (aid, email, name, role, trusted, dtest, dprod) in &members {
                                     div.between {
-                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/links" { "access link" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
+                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/sessions" { "session" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
                                                 form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }

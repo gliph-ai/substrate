@@ -618,7 +618,7 @@ async fn access_link_scopes_projects_and_permissions() {
 
     // Verna only; skip approval; no replies, no files.
     let p = format!("p_{}", w.pid);
-    let r = t.form(&w.dev, "/links", &[("label", "Sarah"), (p.as_str(), "on"), ("deploys", "on"), ("auto", "on"), ("deploy_test", "on"), ("days", "30")]).await;
+    let r = t.form(&w.dev, "/sessions", &[("label", "Sarah"), (p.as_str(), "on"), ("deploys", "on"), ("auto", "on"), ("deploy_test", "on"), ("days", "30")]).await;
     assert_eq!(r.status(), 200);
     let page = r.text().await.unwrap();
     let secret = page.split("/mcp/").nth(1).unwrap().split(['<', '"']).next().unwrap().to_string();
@@ -691,9 +691,9 @@ async fn access_link_scopes_projects_and_permissions() {
     }};
     // The link's own page: its settings, Revoke and its history.
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
-    let page = t.http.get(format!("{}/links/{lid}", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    let page = t.http.get(format!("{}/sessions/{lid}", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
     assert!(page.contains("History") && page.contains("Revoke") && page.contains("deploys to test"), "link page");
-    assert_eq!(t.http.get(format!("{}/links/{lid}", t.base)).header("cookie", &w.tester.cookie).send().await.unwrap().status(), 404);
+    assert_eq!(t.http.get(format!("{}/sessions/{lid}", t.base)).header("cookie", &w.tester.cookie).send().await.unwrap().status(), 404);
     let r = ask("production").await;
     assert_eq!(r["isError"], true, "{r}");
     let r = ask("test").await;
@@ -707,12 +707,12 @@ async fn access_link_scopes_projects_and_permissions() {
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
     let used: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar("SELECT last_used_at FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
     assert!(used.is_some());
-    let r = t.form(&w.dev, &format!("/links/{lid}/revoke"), &[]).await;
+    let r = t.form(&w.dev, &format!("/sessions/{lid}/revoke"), &[]).await;
     assert_eq!(r.status(), 303);
     let gone = t.http.post(&url).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).send().await.unwrap();
     assert_eq!(gone.status(), 404);
 
     // Someone else cannot revoke or reuse it.
-    let r = t.form(&w.tester, &format!("/links/{lid}/revoke"), &[]).await;
+    let r = t.form(&w.tester, &format!("/sessions/{lid}/revoke"), &[]).await;
     assert_eq!(r.status(), 404);
 }

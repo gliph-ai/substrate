@@ -20,9 +20,9 @@ Substrate has six identities:
 - MCP clients (OAuth registrations)
 - projects (bound to a machine, a Herdr pane and an agent session id)
 - reply tokens (one for each delivered message)
-- access links (one for each person a producer gives access)
+- session links (one for each person a producer gives access)
 
-An access link (`/mcp/<secret>`) is a credential in the URL. Anyone with the
+A session link (`/mcp/<secret>`) is a credential in the URL. Anyone with the
 link has its access, so each link is limited:
 
 - It reaches only the projects its producer picked.
