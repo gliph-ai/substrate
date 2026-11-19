@@ -363,3 +363,15 @@ a.me { text-decoration: none; gap: 8px; }
 .list > .label:has(> svg) { font-size: 14px; font-weight: 500; color: var(--text); padding-top: 12px; }
 .stat .k { display: inline-flex; align-items: center; gap: 7px; }
 .stat .k svg { width: 14px; height: 14px; color: #A98BFF; }
+
+/* Timeline: chat messages are cards; Substrate, relay and CI updates are one compact line. */
+.ev-line { padding: 4px 12px; font-size: 13px; color: var(--text-2); }
+.ev-line .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ev-line .who { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.ev-line .ev-av { width: 22px; height: 22px; }
+.ev-line .ev-av.mark img, .ev-line .ev-av.mark svg { width: 13px; height: 13px; }
+.ev-line .time { color: var(--faint); font-size: 12px; flex: none; }
+.ev-line .body { margin: 2px 0 0 30px; color: var(--muted); font-size: 13px; }
+.ev-line .row { margin-left: 30px; }
+.ev-line .deploy { margin-left: 30px; }
+.timeline { gap: 8px; }

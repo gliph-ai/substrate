@@ -191,16 +191,6 @@ fn stage_tag(stage: &str) -> Markup {
     html! { span class=(format!("tag {cls}")) { (label) } }
 }
 
-fn state_dot(state: &str) -> &'static str {
-    match state {
-        "idle" | "done" => "ok",
-        "working" => "blue",
-        "blocked" | "needs_rebind" => "warn",
-        "offline" | "unbound" => "",
-        _ => "",
-    }
-}
-
 /// A notice: a solid card with a coloured icon chip. kind: ok, warn or bad.
 pub(crate) fn notice(kind: &str, body: Markup) -> Markup {
     let icon = match kind { "ok" => "check", "bad" => "x", _ => "alert" };
@@ -483,6 +473,31 @@ pub fn magic_confirm_page(t: &str) -> Html<String> {
 
 // ---- dashboard ----
 
+/// One request on the dashboard: who sent it, to which project, what it says, where it is.
+fn request_row(m: &Message, projects: &[Project]) -> Markup {
+    let p = projects.iter().find(|p| p.id == m.project_id);
+    html! {
+        a.item.link-row href=(format!("/conversations/{}", m.conversation_id)) {
+            span.l.row style="gap:12px;min-width:0" {
+                img.avatar-img src=(format!("/accounts/{}/avatar", m.sender_id)) alt="" style="width:30px;height:30px";
+                span.stack style="gap:3px;align-items:flex-start;min-width:0" {
+                    span.row style="gap:8px;font-size:13px" {
+                        strong style="font-weight:500" { (m.sender_label) }
+                        @if let Some(p) = p { span.faint { "to" } (picon(&p.id, &p.name, &p.icon_etag, 16)) span.muted { (p.name) } }
+                        span.faint { (ago_text(&m.updated_at)) }
+                    }
+                    span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62ch" { (truncate(&m.text, 110)) }
+                }
+            }
+            span.r.row {
+                @if !m.deploy_stage.is_empty() && m.deploy_stage != "not_deploying" { span.tag.blue { (m.deploy_stage.replace('_', " ")) } }
+                (stage_tag(&m.stage))
+                span.chev { (ic("arrow-right")) }
+            }
+        }
+    }
+}
+
 async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     let owned = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
     let testing: Vec<(String, String, String, String)> = sqlx::query_as(
@@ -491,15 +506,17 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     let approvals = sqlx::query_as::<_, Message>(
         "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.sender_id, m.order_n",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    let recent = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 ORDER BY m.updated_at DESC LIMIT 12",
+    // Active: with the agent, waiting on a tester's answer, or still on its way to production.
+    let active = sqlx::query_as::<_, Message>(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND (m.stage IN ('approved','dispatched','accepted','submitted','working','awaiting_sender')
+           OR m.deploy_stage IN ('committing','running_checks','pushing','fix_committed','ci_running','ci_passed','deploying','deployed')) ORDER BY m.updated_at DESC LIMIT 30",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    let machines: Vec<(String, String, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT id, name, last_seen FROM machines WHERE account_id=$1 AND NOT revoked ORDER BY created_at",
+    let history = sqlx::query_as::<_, Message>(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('completed','rejected','cancelled','expired','failed','interrupted','uncertain','answered')
+           AND m.deploy_stage NOT IN ('committing','running_checks','pushing','fix_committed','ci_running','ci_passed','deploying','deployed') ORDER BY m.updated_at DESC LIMIT 25",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    let hour = (now() + Duration::hours(0)).format("%H").to_string().parse::<u32>().unwrap_or(12);
+    let hour = now().format("%H").to_string().parse::<u32>().unwrap_or(12);
     let greet = match hour { 5..=11 => "Good morning,", 12..=17 => "Good afternoon,", _ => "Good evening," };
-    let completed: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage='completed'").bind(&a.id).fetch_one(&app.db).await?;
     let queued: Vec<(String, i64)> = sqlx::query_as("SELECT m.project_id, count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage = ANY($2) GROUP BY 1")
         .bind(&a.id).bind(QUEUED).fetch_all(&app.db).await?;
     let gone: Vec<(&Project, i64)> = owned.iter().filter(|p| agent_gone(&p.state))
@@ -508,9 +525,16 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
 
     Ok(Html(layout("Dashboard", Some(a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
-            div.between style="padding:8px 4px 12px" {
+            div.between style="padding:8px 0 12px" {
                 div style="font-size:clamp(32px,4vw,44px);font-weight:500;letter-spacing:-.03em;line-height:1.05" { span.grad { (greet) } br; (a.label()) }
                 div.row { a.btn.primary href="/links/new" { (ic("link")) "New access link" } }
+            }
+            @if owned.is_empty() && testing.is_empty() {
+                div.card {
+                    h3 { "Set up your first project" }
+                    p.muted { "Install the relay on the Mac where your agents run. Each agent in Herdr gets a project." }
+                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate daemon install"]))
+                }
             }
             @if !approvals.is_empty() {
                 div.card.glow.stack id="approvals" {
@@ -525,68 +549,29 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                         @for (p, q) in &gone {
                             a.item href=(format!("/projects/{}", p.id)) {
                                 span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (status_tag(&p.state)) }
-                                span.r { @if *q > 0 { (q) " queued · " } "Rebind" }
+                                span.r { @if *q > 0 { (q) " queued · " } "Move it" }
                             }
                         }
                     }
                 }
             }
-            div.grid.tight {
-                div.card.stat { span.k { (ic("folder")) "Projects" } span.big { (owned.len()) } }
-                div.card.stat { span.k { (ic("monitor")) "Machines online" } span.v { (machines.iter().filter(|m| app.machine_online(&m.0)).count()) " of " (machines.len()) } }
-                div.card.stat { span.k { (ic("clock")) "Waiting" } span.v style="color:var(--amber)" { (approvals.len()) } }
-                div.card.stat { span.k { (ic("check")) "Completed" } span.big.grad { (completed) } }
-            }
-            @if owned.is_empty() {
-                div.card {
-                    h3 { "Set up your first project" }
-                    p.muted { "Install the relay on the Mac where your agents run. Each agent in Herdr gets a project." }
-                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate daemon install"]))
+            @if !owned.is_empty() {
+                div.list {
+                    div.label { (ic("zap")) "Active now" }
+                    @if active.is_empty() { div.item { span.muted { "Nothing is with an agent right now." } } }
+                    @for m in &active { (request_row(m, &owned)) }
+                }
+                div.list {
+                    div.label { (ic("clock")) "History" }
+                    @if history.is_empty() { div.item { span.muted { "Finished requests show up here." } } }
+                    @for m in &history { (request_row(m, &owned)) }
                 }
             }
-            div.split {
-                div.main.stack {
-                    @if !owned.is_empty() {
-                        div.list {
-                            div.label { (ic("folder")) "Your projects" }
-                            @for p in &owned {
-                                a.item href=(format!("/projects/{}", p.id)) {
-                                    span.l { (picon(&p.id, &p.name, &p.icon_etag, 28)) strong style="font-weight:500" { (p.name) } span.muted.mono { (p.handle) } span class=(format!("dot {}", state_dot(&p.state))) {} (logo(agent_logo(&p.agent), "")) }
-                                    span.r { (status_tag(&p.state)) " " @if p.auto_active() { span.tag.warn { "auto relay" } } @else { "approval required" } }
-                                }
-                            }
-                        }
-                    }
-                    @if !recent.is_empty() {
-                        div.list {
-                            div.label { (ic("clock")) "Recent" }
-                            @for m in &recent {
-                                a.item href=(format!("/conversations/{}", m.conversation_id)) {
-                                    span.l { (stage_tag(&m.stage)) span { (truncate(&m.text, 70)) } }
-                                    span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (ago(&m.updated_at)) }
-                                }
-                            }
-                        }
-                    }
-                }
-                div.side.stack {
-                    @if !testing.is_empty() {
-                        div.list {
-                            div.label { (ic("flask")) "Projects you test" }
-                            @for (pid, name, owner, etag) in &testing { a.item href=(format!("/projects/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
-                            a.item href="/connect" { span.l { (ic("plug")) "Connect your assistant" } }
-                        }
-                    }
-                    div.list {
-                        div.label { (ic("monitor")) "Machines" }
-                        @if machines.is_empty() { div.item { span.muted { "None yet. Run " span.mono { "substrate login" } } } }
-                        @for (mid, name, seen) in &machines {
-                            a.item href="/machines" {
-                                span.l { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} (name) }
-                                span.r { @if app.machine_online(mid) { "online" } @else if let Some(s) = seen { "seen " (ago_text(s)) } @else { "never connected" } }
-                            }
-                        }
-                    }
+            @if !testing.is_empty() {
+                div.list {
+                    div.label { (ic("flask")) "Projects you test" }
+                    @for (pid, name, owner, etag) in &testing { a.item href=(format!("/projects/{pid}")) { span.l { (picon(pid, name, etag, 24)) (name) } span.r { (owner) } } }
+                    a.item href="/chat" { span.l { (ic("message")) "Open the chat" } }
                 }
             }
         }
@@ -1005,13 +990,10 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
     Ok(Html(layout(&title, Some(&a), Some(format!("/conversations/{cid}/live")), html! {
         div.between style="padding:4px 0 16px" {
             div.crumbs { (picon(&p.id, &p.name, &p.icon_etag, 24)) a href=(format!("/projects/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
-            div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} (machine.clone().unwrap_or_else(|| "no machine".into())) @if online { " online" } @else { " offline" } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
+            div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} @match &machine { Some(m) => { (m) @if online { " online" } @else { " offline" } }, None => { "No computer" } } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
         }
         div.split style="padding-bottom:48px" {
-            div.main.stack {
-                @for e in &events {
-                    @if !e.held || owner { (event_card(&app, &a, &p, &msgs, &atts, e, owner, &own_host)) }
-                }
+            div.main.stack.timeline {
                 @if let Some(m) = latest {
                     @if m.stage == "awaiting_sender" && !owner {
                         form.card method="post" action=(format!("/conversations/{cid}/answer")) {
@@ -1022,6 +1004,10 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                             div.row { button.btn.primary type="submit" { (ic("send")) "Send answer" } }
                         }
                     }
+                }
+                // Newest first.
+                @for e in events.iter().rev() {
+                    @if !e.held || owner { (event_card(&app, &a, &p, &msgs, &atts, e, owner, &own_host)) }
                 }
             }
             div.side.stack {
@@ -1079,7 +1065,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
             let open = m.map(|m| m.stage == stage).unwrap_or(false);
             let attention = owner && open && (stage == "pending_approval" || stage == "held");
             html! {
-                article class=(if attention { "card ev attention" } else { "card ev" }) {
+                article class=(if attention { "card ev attention" } else { "ev-line" }) {
                     div.head { span.who {
                         // A decision by the developer shows their face; the rest is Substrate.
                         @if matches!(stage, "approved" | "rejected" | "cancelled") && !e.data["by"].as_str().unwrap_or("").is_empty() {
@@ -1106,9 +1092,8 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
         "relay" => {
             let stage = e.data["stage"].as_str().unwrap_or("");
             html! {
-                article.card.ev {
-                    div.head { span.who { span.ev-av.mark { (ic("monitor")) } span style="font-weight:500" { "Local relay" } span.role.mono { (p.pane_id) } } span.time { (hhmm(&e.created_at)) } }
-                    div.row { span class=(format!("tag {}", if matches!(stage, "uncertain" | "failed") { "bad" } else { "ok" })) { (text) } }
+                article.ev-line {
+                    div.head { span.who { span.ev-av.mark { (ic("monitor")) } span.ev-text { (text) } span.role.mono { (p.pane_id) } } span.time { (hhmm(&e.created_at)) } }
                     @if owner && stage == "working" { @if let Some(m) = m { @if m.agent_idle && !m.excerpt.is_empty() {
                         details { summary { "Terminal excerpt (only you see this)" } div.code style="margin-top:8px" { (m.excerpt) } }
                     } } }
@@ -1141,7 +1126,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
             let verify = d["verify_url"].as_str().unwrap_or("");
             let gitlab = ci.contains("gitlab");
             html! {
-                article.card.ev id="deploy" {
+                article.ev-line id="deploy" {
                     div.head { span.who { span.ev-av.mark { (logo(Some(if gitlab { "gitlab" } else { "github-actions" }), "")) } span style="font-weight:500" { "CI and deploy" } span.role { "watched by the relay" } } span.time { (hhmm(&e.created_at)) } }
                     div.body { (text) }
                     @if !failed { div.deploy {
