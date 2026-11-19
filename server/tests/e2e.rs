@@ -216,8 +216,8 @@ async fn full_loop_approval_delivery_reply_deploy() {
     assert_eq!(r.headers()["content-type"], "image/svg+xml");
     assert!(s["agent_online"].is_boolean());
 
-    // It waits on the developer's Approvals page, with Approve and the prompt.
-    let page = t.http.get(format!("{}/approvals", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    // It waits on the developer's dashboard, with Approve and the prompt.
+    let page = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
     assert!(page.contains("doesn&#39;t save my preferences") || page.contains("doesn't save my preferences"), "pending message listed");
     assert!(page.contains(&format!("/approvals/{mid}/approve")));
 
@@ -681,8 +681,11 @@ async fn access_link_scopes_projects_and_permissions() {
             "arguments": {"project_id": pid, "text": "ship the fix", "deploy": deploy, "send_anyway": true}}})).send().await.unwrap().json().await.unwrap();
         r["result"].clone()
     }};
-    let page = t.http.get(format!("{}/approvals", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
-    assert!(page.contains("Approvals"), "approvals page renders");
+    // The link's own page: its settings, Revoke and its history.
+    let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
+    let page = t.http.get(format!("{}/links/{lid}", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("History") && page.contains("Revoke") && page.contains("deploys to test"), "link page");
+    assert_eq!(t.http.get(format!("{}/links/{lid}", t.base)).header("cookie", &w.tester.cookie).send().await.unwrap().status(), 404);
     let r = ask("production").await;
     assert_eq!(r["isError"], true, "{r}");
     let r = ask("test").await;

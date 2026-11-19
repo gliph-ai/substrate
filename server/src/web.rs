@@ -151,6 +151,12 @@ fn hhmm(t: &DateTime<Utc>) -> String {
     t.format("%H:%M").to_string()
 }
 
+/// "just now" or "5m ago": a time in a sentence.
+pub(crate) fn ago_text(t: &DateTime<Utc>) -> String {
+    let a = ago(t);
+    if a == "now" { "just now".into() } else { format!("{a} ago") }
+}
+
 pub(crate) fn ago(t: &DateTime<Utc>) -> String {
     let s = (now() - *t).num_seconds().max(0);
     match s {
@@ -268,7 +274,6 @@ fn state_label(state: &str) -> &'static str {
 /// Which top-nav item a page belongs to, by its title; everything else is the dashboard.
 fn section_of(title: &str) -> &'static str {
     match title {
-        "Approvals" => "/approvals",
         "Access links" | "New access link" | "Link created" => "/links",
         "Machines" => "/machines",
         "Audit log" => "/audit",
@@ -301,7 +306,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { (orb("")) "Substrate" }
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
-                                    @for (href, label, icon) in [("/approvals", "Approvals", "check"), ("/chat", "Chat", "message"), ("/links", "Access links", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
+                                    @for (href, label, icon) in [("/chat", "Chat", "message"), ("/links", "Access links", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
                                         a.on[cur == href] href=(href) aria-current=[(cur == href).then_some("page")] { @if cur == href { (ic(icon)) } (label) }
                                     }
                                 }
@@ -481,7 +486,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         "SELECT p.id, p.name, acc.email, p.icon_etag FROM members m JOIN projects p ON p.id=m.project_id JOIN accounts acc ON acc.id=p.owner_id WHERE m.account_id=$1 AND m.role='tester' ORDER BY p.name",
     ).bind(&a.id).fetch_all(&app.db).await?;
     let approvals = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.order_n",
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.sender_id, m.order_n",
     ).bind(&a.id).fetch_all(&app.db).await?;
     let recent = sqlx::query_as::<_, Message>(
         "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 ORDER BY m.updated_at DESC LIMIT 12",
@@ -505,16 +510,9 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 div.row { a.btn.primary href="/links/new" { (ic("link")) "New access link" } }
             }
             @if !approvals.is_empty() {
-                div.card.glow {
+                div.card.glow.stack id="approvals" {
                     div.row style="font-size:19px;font-weight:500" { "Needs approval " span.badge { (approvals.len()) } }
-                    div.list style="padding:0;background:transparent" {
-                        @for m in &approvals {
-                            a.item href=(format!("/conversations/{}", m.conversation_id)) {
-                                span.l { span class=(format!("dot {}", if m.stage == "held" { "bad" } else { "warn" })) {} span { (truncate(&m.text, 90)) } @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } } }
-                                span.r { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) (m.client_name) " · " (ago(&m.created_at)) }
-                            }
-                        }
-                    }
+                    (approvals_section(a, &approvals, &owned, "/#approvals", true))
                 }
             }
             @if !gone.is_empty() {
@@ -582,7 +580,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                         @for (mid, name, seen) in &machines {
                             a.item href="/machines" {
                                 span.l { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} (name) }
-                                span.r { @if app.machine_online(mid) { "online" } @else if let Some(s) = seen { "seen " (ago(s)) " ago" } @else { "never connected" } }
+                                span.r { @if app.machine_online(mid) { "online" } @else if let Some(s) = seen { "seen " (ago_text(s)) } @else { "never connected" } }
                             }
                         }
                     }
@@ -1054,7 +1052,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
 }
 
 #[allow(clippy::too_many_arguments)]
-fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts: &[Attachment], e: &Event, owner: bool, own_host: &str) -> Markup {
+pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts: &[Attachment], e: &Event, owner: bool, own_host: &str) -> Markup {
     let m = msgs.iter().find(|m| m.id == e.message_id);
     let my_atts: Vec<&Attachment> = atts.iter().filter(|x| x.message_id == e.message_id && ((e.actor_kind == "human" && x.origin == "tester") || (e.actor_kind == "agent" && x.origin == "agent" && e.data["attachments"].as_array().map(|l| l.iter().any(|v| v.as_str() == Some(&x.id))).unwrap_or(false)))).collect();
     let text = if e.actor_kind == "agent" || e.actor_kind == "deploy" { if owner { e.text.clone() } else { crate::safety::defang_links(&e.text, own_host, &p.retest_hosts) } } else { e.text.clone() };
@@ -1063,7 +1061,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
             article.card.ev {
                 div.head {
                     div.who {
-                        span.avatar { (initials(&e.actor_name)) @if let Some(m) = m { (logo(client_logo(&m.client_name), "")) } }
+                        span.av-wrap { @if let Some(m) = m { img.ev-av src=(format!("/accounts/{}/avatar", m.sender_id)) alt=""; span.av-badge { (logo(client_logo(&m.client_name), "")) } } @else { span.avatar { (initials(&e.actor_name)) } } }
                         div { div style="font-weight:500" { (e.actor_name) span.role { " · " @if m.map(|m| m.sender_id == p.owner_id).unwrap_or(false) { "developer" } @else { "tester" } } }
                               @if let Some(m) = m { @if !m.client_name.is_empty() { div.role { "written by their assistant, " (m.client_name) } } } }
                     }
@@ -1079,7 +1077,12 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
             let attention = owner && open && (stage == "pending_approval" || stage == "held");
             html! {
                 article class=(if attention { "card ev attention" } else { "card ev" }) {
-                    div.head { span.who { span style="font-weight:500" { "Substrate" } @if !stage.is_empty() { (stage_tag(stage)) } } span.time { (hhmm(&e.created_at)) } }
+                    div.head { span.who {
+                        // A decision by the developer shows their face; the rest is Substrate.
+                        @if matches!(stage, "approved" | "rejected" | "cancelled") && !e.data["by"].as_str().unwrap_or("").is_empty() {
+                            img.ev-av src=(format!("/accounts/{}/avatar", p.owner_id)) alt=""; span style="font-weight:500" { (e.data["by"].as_str().unwrap_or("")) }
+                        } @else { span.ev-av.mark { (orb("")) } span style="font-weight:500" { "Substrate" } }
+                        @if !stage.is_empty() { (stage_tag(stage)) } } span.time { (hhmm(&e.created_at)) } }
                     div.body style="color:var(--text-2)" { (text) }
                     @if attention { @if let Some(m) = m {
                         @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
@@ -1101,7 +1104,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
             let stage = e.data["stage"].as_str().unwrap_or("");
             html! {
                 article.card.ev {
-                    div.head { span.who { span style="font-weight:500" { "Local relay" } span.role.mono { (p.pane_id) } } span.time { (hhmm(&e.created_at)) } }
+                    div.head { span.who { span.ev-av.mark { (ic("monitor")) } span style="font-weight:500" { "Local relay" } span.role.mono { (p.pane_id) } } span.time { (hhmm(&e.created_at)) } }
                     div.row { span class=(format!("tag {}", if matches!(stage, "uncertain" | "failed") { "bad" } else { "ok" })) { (text) } }
                     @if owner && stage == "working" { @if let Some(m) = m { @if m.agent_idle && !m.excerpt.is_empty() {
                         details { summary { "Terminal excerpt (only you see this)" } div.code style="margin-top:8px" { (m.excerpt) } }
@@ -1112,7 +1115,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
         "agent" => html! {
             article class=(if e.held { "card ev danger" } else { "card ev" }) {
                 div.head {
-                    span.who { (logo(agent_logo(&p.agent), "")) span style="font-weight:500" { (e.actor_name) } span.role { "agent · " (match e.kind.as_str() { "final" => "final reply", "question" => "question for the tester", "progress" => "progress", _ => "reply" }) } }
+                    span.who { span.ev-av.mark { (logo(agent_logo(&p.agent), "")) } span style="font-weight:500" { (e.actor_name) } span.role { "agent · " (match e.kind.as_str() { "final" => "final reply", "question" => "question for the tester", "progress" => "progress", _ => "reply" }) } }
                     span.time { (hhmm(&e.created_at)) }
                 }
                 @if e.held {
@@ -1136,7 +1139,7 @@ fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts:
             let gitlab = ci.contains("gitlab");
             html! {
                 article.card.ev id="deploy" {
-                    div.head { span.who { (logo(Some(if gitlab { "gitlab" } else { "github-actions" }), "")) span style="font-weight:500" { "CI and deploy" } span.role { "watched by the relay" } } span.time { (hhmm(&e.created_at)) } }
+                    div.head { span.who { span.ev-av.mark { (logo(Some(if gitlab { "gitlab" } else { "github-actions" }), "")) } span style="font-weight:500" { "CI and deploy" } span.role { "watched by the relay" } } span.time { (hhmm(&e.created_at)) } }
                     div.body { (text) }
                     @if !failed { div.deploy {
                         @for (i, s) in order.iter().enumerate() {
@@ -1176,62 +1179,63 @@ pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a):
     Ok(Redirect::to(&format!("/conversations/{}", m.conversation_id)).into_response())
 }
 
-/// GET /approvals: every tester message waiting for the owner, grouped by who sent it
-/// (an access link or an invited tester), with the exact prompt the agent will get.
-pub async fn approvals(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
-    let rows = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.sender_id, m.order_n",
-    ).bind(&a.id).fetch_all(&app.db).await?;
-    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
+/// Tester messages waiting for the owner, grouped by who sent them, each with the
+/// prompt the agent will get and Approve / Reject. On the dashboard and on an access
+/// link's page; `back` is where the buttons return to.
+pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], back: &str, group: bool) -> Markup {
     let mut groups: Vec<(String, Vec<&Message>)> = vec![];
-    for m in &rows {
+    for m in rows {
         match groups.last_mut() {
-            Some((s, l)) if *s == m.sender_id => l.push(m),
+            Some((s, l)) if *s == m.sender_id && group => l.push(m),
             _ => groups.push((m.sender_id.clone(), vec![m])),
         }
     }
-    Ok(Html(layout("Approvals", Some(&a), Some("/live".into()), html! {
-        div.narrow.stack style="padding:16px 0 48px" {
-            h1 { "Approvals" }
-            p.lead { "Each tester message waits here until you approve it. You see the exact prompt the agent gets." }
-            @if groups.is_empty() { div.card { h3 { "Nothing waits" } p.muted { "New tester messages show up here." } } }
-            @for (_, list) in &groups {
-                section.list {
-                    div.label { (list[0].sender_label) " · " (list.len()) @if list.len() == 1 { " message" } @else { " messages" } }
-                    @for m in list {
-                        @let p = projects.iter().find(|p| p.id == m.project_id);
-                        div.item.approval {
-                            div.stack style="gap:8px;min-width:0;flex:1" {
-                                div.row {
-                                    @if let Some(p) = p { (picon(&p.id, &p.name, &p.icon_etag, 22)) strong style="font-weight:500" { (p.name) } }
-                                    span.faint style="font-size:13px" { (ago(&m.created_at)) " ago" }
-                                    @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } }
-                                    @if m.envelope.contains("Deploy to production") { span.tag.warn { "deploys to production" } }
-                                    @else if m.envelope.contains("Deploy to test") { span.tag.blue { "deploys to test" } }
-                                }
-                                div style="white-space:pre-wrap" { (m.text) }
-                                details { summary.faint style="font-size:13px;cursor:pointer" { "The prompt the agent gets" } pre.envelope { (envelope_markup(&m.envelope)) } }
+    html! {
+        @for (sender, list) in &groups {
+            section.list.approvals {
+                @if group { div.label.row { img.avatar-img src=(format!("/accounts/{sender}/avatar")) alt=""; (list[0].sender_label) " · " (list.len()) @if list.len() == 1 { " message" } @else { " messages" } } }
+                @for m in list {
+                    @let p = projects.iter().find(|p| p.id == m.project_id);
+                    div.item.approval {
+                        div.stack style="gap:8px;min-width:0;flex:1" {
+                            div.row {
+                                @if let Some(p) = p { (picon(&p.id, &p.name, &p.icon_etag, 22)) strong style="font-weight:500" { (p.name) } }
+                                span.faint style="font-size:13px" { (ago_text(&m.created_at)) }
+                                @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } }
+                                @if m.deploy_allow == "production" && p.map(|p| p.owner_id != m.sender_id).unwrap_or(true) { span.tag.warn { "deploys to production" } }
+                                @else if m.deploy_allow == "test" { span.tag.blue { "deploys to test" } }
                             }
-                            div.row style="flex:none;align-self:flex-start" {
-                                form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(&a)) button.btn.primary.small type="submit" { (ic("check")) "Approve" } }
-                                form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(&a)) button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
-                                a.btn.small.tertiary href=(format!("/conversations/{}", m.conversation_id)) { (ic("eye")) }
-                            }
+                            div style="white-space:pre-wrap" { (m.text) }
+                            details { summary.faint style="font-size:13px;cursor:pointer" { "The prompt the agent gets" } div.envelope { (envelope_markup(&m.envelope)) } }
+                        }
+                        div.row style="flex:none;align-self:flex-start" {
+                            form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.primary.small type="submit" { (ic("check")) "Approve" } }
+                            form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
+                            a.btn.small.tertiary href=(format!("/conversations/{}", m.conversation_id)) title="Conversation" { (ic("eye")) }
                         }
                     }
                 }
             }
         }
-    }).into_string()).into_response())
+    }
 }
 
-pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+#[derive(Deserialize)]
+pub struct DecideForm {
+    csrf: String,
+    #[serde(default)]
+    back: String,
+}
+
+pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<DecideForm>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
     if !matches!(action.as_str(), "approve" | "reject") {
         return Err(Fail::new(404, "no such action"));
     }
     domain::decide(&app, &a.id, &mid, &action).await?;
-    Ok(Redirect::to("/approvals").into_response())
+    // Only back to a page of ours.
+    let back = if f.back.starts_with('/') && !f.back.starts_with("//") { f.back.as_str() } else { "/" };
+    Ok(Redirect::to(back).into_response())
 }
 
 pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): User, Path((cid, seq)): Path<(String, i64)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {

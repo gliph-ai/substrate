@@ -168,7 +168,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
                     @for l in &links {
                         div.item {
                             span.l.stack style="gap:4px;align-items:flex-start" {
-                                span.row { strong style="font-weight:500" { (l.label) } @if l.waiting > 0 { a.tag.warn href="/approvals" style="text-decoration:none" { (l.waiting) " waiting for you" } } }
+                                span.row { a href=(format!("/links/{}", l.id)) style="text-decoration:none" { strong style="font-weight:500" { (l.label) } } @if l.waiting > 0 { a.tag.warn href=(format!("/links/{}#waiting", l.id)) style="text-decoration:none" { (l.waiting) " waiting for you" } } }
                                 span.muted style="font-size:13px" { (l.projects.join(", ")) }
                                 span.row style="gap:6px" {
                                     @if l.can_read { span.tag { "replies" } }
@@ -227,6 +227,74 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
                     }
                     div.field { label for="ld" { "Expires" } select id="ld" name="days" { option value="7" { "in 7 days" } option value="30" selected { "in 30 days" } option value="90" { "in 90 days" } option value="365" { "in a year" } } }
                     div.row { button.btn.primary type="submit" { (ic("link")) "Create link" } a.btn.tertiary href="/links" { "Cancel" } }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+/// GET /links/{lid}: one access link: what it reaches and may do, what waits for
+/// approval, and everything its holder sent and got back.
+pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<String>) -> Result<Response, Fail> {
+    let l = sqlx::query_as::<_, LinkRow>(
+        "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
+                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
+                COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
+                COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
+         FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
+         WHERE l.id=$1 AND l.owner_id=$2 GROUP BY l.id",
+    ).bind(&lid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such link"))?;
+    let (acct, revoked): (String, bool) = sqlx::query_as("SELECT account_id, revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&app.db).await?;
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
+    let waiting = sqlx::query_as::<_, crate::domain::Message>("SELECT * FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held') ORDER BY order_n")
+        .bind(&acct).fetch_all(&app.db).await?;
+    let convs: Vec<(String, String, String)> = sqlx::query_as("SELECT id, project_id, title FROM conversations WHERE sender_id=$1 ORDER BY updated_at DESC LIMIT 20")
+        .bind(&acct).fetch_all(&app.db).await?;
+    let mut history = vec![];
+    for (cid, pid, title) in &convs {
+        let Some(p) = projects.iter().find(|p| &p.id == pid) else { continue };
+        let events = sqlx::query_as::<_, crate::domain::Event>("SELECT * FROM events WHERE conversation_id=$1 ORDER BY seq").bind(cid).fetch_all(&app.db).await?;
+        let msgs = sqlx::query_as::<_, crate::domain::Message>("SELECT * FROM messages WHERE conversation_id=$1 ORDER BY order_n").bind(cid).fetch_all(&app.db).await?;
+        let atts = sqlx::query_as::<_, crate::domain::Attachment>("SELECT * FROM attachments WHERE conversation_id=$1").bind(cid).fetch_all(&app.db).await?;
+        history.push((cid.clone(), p, title.clone(), events, msgs, atts));
+    }
+    let host = app.cfg.host();
+    let live = !revoked && l.expires_at > now();
+    Ok(Html(layout("Access links", Some(&a), Some("/live".into()), html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            div.crumbs { a href="/links" style="text-decoration:none" { "Access links" } span.sep { "/" } span.muted { (l.label) } }
+            div.between {
+                div.row style="gap:14px" { img.avatar-img src=(format!("/accounts/{acct}/avatar")) alt="" style="width:44px;height:44px"; h1 style="margin:0" { (l.label) } }
+                @if live {
+                    form.inline method="post" action=(format!("/links/{}/revoke", l.id)) data-confirm="Revoke this link? It stops working at once." {
+                        (csrf(&a)) button.btn.danger type="submit" { (ic("trash")) "Revoke" }
+                    }
+                } @else { span.tag.off { @if revoked { "revoked" } @else { "expired" } } }
+            }
+            div.card.stack style="gap:10px" {
+                div.row style="flex-wrap:wrap" { @for name in &l.projects { @if let Some(p) = projects.iter().find(|p| &p.name == name) { span.row style="gap:6px" { (picon(&p.id, &p.name, &p.icon_etag, 20)) (p.name) } } } }
+                div.row style="gap:6px;flex-wrap:wrap" {
+                    @if l.can_read { span.tag { "replies" } }
+                    @if l.can_deploys { span.tag { "deploys" } }
+                    @if l.can_files { span.tag { "files" } }
+                    @if l.deploy_test { span.tag.blue { "deploys to test" } }
+                    @if l.deploy_prod { span.tag.warn { "deploys to production" } }
+                    @if l.auto { span.tag.warn { "no approval" } }
+                }
+                span.faint style="font-size:13px" { @match l.last_used_at { Some(t) => { "Used " (crate::web::ago_text(&t)) }, None => { "Not used yet" } } " · expires " (l.expires_at.format("%b %d")) }
+            }
+            @if !waiting.is_empty() {
+                div.card.glow.stack id="waiting" {
+                    div.row style="font-size:19px;font-weight:500" { "Waiting for you " span.badge { (waiting.len()) } }
+                    (crate::web::approvals_section(&a, &waiting, &projects, &format!("/links/{lid}#waiting"), false))
+                }
+            }
+            h3 style="margin:12px 0 0" { "History" }
+            @if history.is_empty() { p.muted { "Nothing sent yet." } }
+            @for (cid, p, title, events, msgs, atts) in &history {
+                section.stack {
+                    div.row { (picon(&p.id, &p.name, &p.icon_etag, 20)) a href=(format!("/conversations/{cid}")) style="text-decoration:none;font-weight:500" { (title) } span.faint style="font-size:13px" { (p.name) } }
+                    @for e in events { (crate::web::event_card(&app, &a, p, msgs, atts, e, true, &host)) }
                 }
             }
         }
