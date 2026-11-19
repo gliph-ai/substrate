@@ -285,6 +285,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
                                     a href="/" { "Dashboard" }
+                                    a href="/approvals" { "Approvals" }
                                     a href="/chat" { "Chat" }
                                     a href="/links" { "Access links" }
                                     a href="/machines" { "Machines" }
@@ -1159,6 +1160,64 @@ pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a):
     check_csrf(&app, &headers, &a, &f.csrf)?;
     let m = domain::decide(&app, &a.id, &mid, &action).await?;
     Ok(Redirect::to(&format!("/conversations/{}", m.conversation_id)).into_response())
+}
+
+/// GET /approvals: every tester message waiting for the owner, grouped by who sent it
+/// (an access link or an invited tester), with the exact prompt the agent will get.
+pub async fn approvals(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
+    let rows = sqlx::query_as::<_, Message>(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.sender_id, m.order_n",
+    ).bind(&a.id).fetch_all(&app.db).await?;
+    let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
+    let mut groups: Vec<(String, Vec<&Message>)> = vec![];
+    for m in &rows {
+        match groups.last_mut() {
+            Some((s, l)) if *s == m.sender_id => l.push(m),
+            _ => groups.push((m.sender_id.clone(), vec![m])),
+        }
+    }
+    Ok(Html(layout("Approvals", Some(&a), Some("/live".into()), html! {
+        div.narrow.stack style="padding:16px 0 48px" {
+            h1 { "Approvals" }
+            p.lead { "Each tester message waits here until you approve it. You see the exact prompt the agent gets." }
+            @if groups.is_empty() { div.card { h3 { "Nothing waits" } p.muted { "New tester messages show up here." } } }
+            @for (_, list) in &groups {
+                section.list {
+                    div.label { (list[0].sender_label) " · " (list.len()) @if list.len() == 1 { " message" } @else { " messages" } }
+                    @for m in list {
+                        @let p = projects.iter().find(|p| p.id == m.project_id);
+                        div.item.approval {
+                            div.stack style="gap:8px;min-width:0;flex:1" {
+                                div.row {
+                                    @if let Some(p) = p { (picon(&p.id, &p.name, &p.icon_etag, 22)) strong style="font-weight:500" { (p.name) } }
+                                    span.faint style="font-size:13px" { (ago(&m.created_at)) " ago" }
+                                    @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } }
+                                    @if m.envelope.contains("Deploy to production") { span.tag.warn { "deploys to production" } }
+                                    @else if m.envelope.contains("Deploy to test") { span.tag.blue { "deploys to test" } }
+                                }
+                                div style="white-space:pre-wrap" { (m.text) }
+                                details { summary.faint style="font-size:13px;cursor:pointer" { "The prompt the agent gets" } pre.envelope { (envelope_markup(&m.envelope)) } }
+                            }
+                            div.row style="flex:none;align-self:flex-start" {
+                                form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(&a)) button.btn.primary.small type="submit" { (ic("check")) "Approve" } }
+                                form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(&a)) button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
+                                a.btn.small.tertiary href=(format!("/conversations/{}", m.conversation_id)) { (ic("eye")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }).into_string()).into_response())
+}
+
+pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    if !matches!(action.as_str(), "approve" | "reject") {
+        return Err(Fail::new(404, "no such action"));
+    }
+    domain::decide(&app, &a.id, &mid, &action).await?;
+    Ok(Redirect::to("/approvals").into_response())
 }
 
 pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): User, Path((cid, seq)): Path<(String, i64)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {

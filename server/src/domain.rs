@@ -329,6 +329,8 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let via = if m.client_name.is_empty() { String::new() } else { format!(" via {}", m.client_name) };
     add_event(app, &conv, &mid, "human", &label, m.kind, &text,
         json!({"message_id": mid, "client": m.client_name, "attachments": names}), false).await?;
+    app.changed(&p.owner_id); // Approvals and the dashboard refresh
+
     let (sys, detail) = match stage {
         "held" => (format!("Held for the developer. It matched {}. The agent has not received it.", flags.join(", ")), "held"),
         "approved" if role == "owner" => ("Sent by the developer. Queued for the agent.".to_string(), "auto"),

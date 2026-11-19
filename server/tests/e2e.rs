@@ -211,6 +211,11 @@ async fn full_loop_approval_delivery_reply_deploy() {
     let got = t.http.get(f["url"].as_str().unwrap()).send().await.unwrap();
     assert_eq!(got.status(), 200);
 
+    // It waits on the developer's Approvals page, with Approve and the prompt.
+    let page = t.http.get(format!("{}/approvals", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("doesn&#39;t save my preferences") || page.contains("doesn't save my preferences"), "pending message listed");
+    assert!(page.contains(&format!("/approvals/{mid}/approve")));
+
     // Same idempotency key: same message, no duplicate.
     let again = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "The settings page doesn't save my preferences.", "idempotency_key": "k1"})).await;
     assert_eq!(again["structuredContent"]["message_id"], json!(mid));
@@ -671,6 +676,8 @@ async fn access_link_scopes_projects_and_permissions() {
             "arguments": {"project_id": pid, "text": "ship the fix", "deploy": deploy, "send_anyway": true}}})).send().await.unwrap().json().await.unwrap();
         r["result"].clone()
     }};
+    let page = t.http.get(format!("{}/approvals", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("Approvals"), "approvals page renders");
     let r = ask("production").await;
     assert_eq!(r["isError"], true, "{r}");
     let r = ask("test").await;

@@ -133,6 +133,7 @@ pub async fn revoke(app: &AppInner, owner: &str, lid: &str) -> Result<(), Fail> 
 
 #[derive(sqlx::FromRow)]
 struct LinkRow {
+    waiting: i64,
     deploy_test: bool,
     deploy_prod: bool,
     id: String,
@@ -149,6 +150,7 @@ struct LinkRow {
 pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let links = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
+                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
                 COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
          FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
@@ -166,7 +168,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
                     @for l in &links {
                         div.item {
                             span.l.stack style="gap:4px;align-items:flex-start" {
-                                strong style="font-weight:500" { (l.label) }
+                                span.row { strong style="font-weight:500" { (l.label) } @if l.waiting > 0 { a.tag.warn href="/approvals" style="text-decoration:none" { (l.waiting) " waiting for you" } } }
                                 span.muted style="font-size:13px" { (l.projects.join(", ")) }
                                 span.row style="gap:6px" {
                                     @if l.can_read { span.tag { "replies" } }

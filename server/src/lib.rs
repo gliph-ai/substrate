@@ -132,6 +132,8 @@ pub fn router(app: App) -> Router {
         .route("/chat/live", get(chat::live))
         .route("/mcp/{secret}/live", get(chat::link_live))
         .route("/live", get(web::live))
+        .route("/approvals", get(web::approvals))
+        .route("/approvals/{mid}/{action}", post(web::approval_action))
         .route("/chat/rpc", post(chat::rpc))
         .route("/sing", post(sing::sing))
         .route("/links", get(links::page).post(links::create_post))
