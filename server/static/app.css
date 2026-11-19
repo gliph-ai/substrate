@@ -120,11 +120,18 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 /* pills, badges, dots */
 .pill { display: inline-flex; align-items: center; gap: 8px; background: var(--card); border-radius: 999px; padding: 6px 12px; font-size: 13px; }
 .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 12px; }
-.tag { display: inline-flex; border-radius: 999px; padding: 3px 10px; font-size: 12px; background: var(--card-2); color: var(--text-2); }
-.tag.ok { background: var(--teal-bg); color: var(--teal); }
-.tag.warn { background: #2A1E08; color: var(--amber); }
-.tag.bad { background: var(--red-bg); color: var(--red); }
-.tag.blue { background: #161E3D; color: #8FA8FF; }
+/* Tags: a solid neutral chip; the state is a solid dot, never a tinted wash. */
+.tag { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; padding: 3px 9px; font-size: 12px; font-weight: 500; background: var(--btn-2); color: var(--text); white-space: nowrap; }
+.tag.ok::before, .tag.warn::before, .tag.bad::before, .tag.blue::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); flex: none; }
+.tag.ok { --dot: var(--teal); }
+.tag.warn { --dot: var(--amber); }
+.tag.bad { --dot: var(--red); }
+.tag.blue { --dot: #8FA8FF; }
+.tag.off { --dot: var(--faint); color: var(--muted); }
+.tag.off::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); flex: none; }
+.tag.blue::before { animation: tag-pulse 1.2s ease-in-out infinite; }
+@keyframes tag-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .tag.blue::before { animation: none; } }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #52525B; display: inline-block; flex: none; }
 .dot.ok { background: var(--teal); } .dot.warn { background: var(--amber); } .dot.bad { background: var(--red); } .dot.blue { background: #8FA8FF; }
 .logo { width: 18px; height: 18px; vertical-align: -3px; }

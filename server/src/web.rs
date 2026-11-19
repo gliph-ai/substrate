@@ -243,8 +243,8 @@ fn status_tag(state: &str) -> Markup {
         "working" => ("blue", "working"),
         "blocked" => ("warn", "needs you"),
         "needs_rebind" => ("bad", "pane gone"),
-        "offline" => ("", "offline"),
-        "unbound" => ("", "no pane"),
+        "offline" => ("off", "offline"),
+        "unbound" => ("off", "no pane"),
         _ => ("", "unknown"),
     };
     html! { span class=(format!("tag {cls}")) { (txt) } }

@@ -192,7 +192,7 @@ document.addEventListener("submit", (e) => {
   }
   const available = (p) => p && p.agent_online;
   function pill(p) {
-    if (!available(p)) return el("span", "tag", "offline");
+    if (!available(p)) return el("span", "tag off", "offline");
     if (p.agent_state === "working") return el("span", "tag blue", "working");
     if (p.agent_state === "blocked") return el("span", "tag warn", "busy");
     return el("span", "tag ok", "free");
