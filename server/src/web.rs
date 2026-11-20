@@ -485,15 +485,15 @@ pub fn check_email_page(email: &str) -> Html<String> {
     }).into_string())
 }
 
-pub fn magic_confirm_page(t: &str) -> Html<String> {
+pub fn magic_confirm_page(t: &str, auto: bool) -> Html<String> {
     Html(layout("Finish signing in", None, None, html! {
         div.narrow style="padding:64px 0" class="stack" {
             div.card {
                 h1 { "Finish signing in" }
-                // The script signs in by itself after 5 s; the button is there without it.
-                // A link scanner that only fetches the page never posts the form.
-                form method="post" action="/auth/magic" data-autosubmit="5" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { (ic("log-in")) "Sign in" } }
-                p.muted.autosubmit-note style="margin:0;font-size:14px" hidden { "Signing you in in " span.count { "5" } " s." }
+                // In the browser that asked for the link, the script signs in by itself after 5 s.
+                // Elsewhere (another device, a link scanner) only the button posts the form.
+                form method="post" action="/auth/magic" data-autosubmit=[auto.then_some("5")] { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { (ic("log-in")) "Sign in" } }
+                @if auto { p.muted.autosubmit-note style="margin:0;font-size:14px" hidden { "Signing you in in " span.count { "5" } " s." } }
             }
         }
     }).into_string())
@@ -1094,7 +1094,9 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
 pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Message], atts: &[Attachment], e: &Event, owner: bool, own_host: &str) -> Markup {
     let m = msgs.iter().find(|m| m.id == e.message_id);
     let my_atts: Vec<&Attachment> = atts.iter().filter(|x| x.message_id == e.message_id && ((e.actor_kind == "human" && x.origin == "tester") || (e.actor_kind == "agent" && x.origin == "agent" && e.data["attachments"].as_array().map(|l| l.iter().any(|v| v.as_str() == Some(&x.id))).unwrap_or(false)))).collect();
-    let text = if e.actor_kind == "agent" || e.actor_kind == "deploy" { if owner { e.text.clone() } else { crate::safety::defang_links(&e.text, own_host, &p.retest_hosts) } } else { e.text.clone() };
+    // Agent-written text, including a developer note the agent summarized, has its links defanged for testers.
+    let agent_written = e.actor_kind == "agent" || e.actor_kind == "deploy" || (e.actor_kind == "developer" && e.data.get("via").is_some());
+    let text = if agent_written { if owner { e.text.clone() } else { crate::safety::defang_links(&e.text, own_host, &p.retest_hosts) } } else { e.text.clone() };
     match e.actor_kind.as_str() {
         "human" => html! {
             article.card.ev {
@@ -1156,15 +1158,22 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
             }
         }
         "developer" => html! {
-            article.card.ev {
+            article class=(if e.held { "card ev danger" } else { "card ev" }) {
                 div.head {
                     div.who {
                         img.ev-av src=(format!("/accounts/{}/avatar", p.owner_id)) alt="";
-                        div { div style="font-weight:500" { (e.actor_name) span.role { " · developer" } } }
+                        div { div style="font-weight:500" { (e.actor_name) span.role { " · developer" } }
+                              @if let Some(via) = e.data["via"].as_str() { div.role { "the developer's words to the agent, summarized by " (via) } } }
                     }
                     span.time { (hhmm(&e.created_at)) }
                 }
+                @if e.held {
+                    div.tag.bad { "Held: looks like it contains " (e.data["secret_hits"].as_array().map(|v| v.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default()) ". The tester can't see it." }
+                }
                 div.body style="white-space:pre-wrap" { (text) }
+                @if e.held && owner {
+                    form method="post" action=(format!("/conversations/{}/release/{}", e.conversation_id, e.seq)) data-confirm="Show this note to the tester as it is?" { (csrf(a)) button.btn.small type="submit" { (ic("eye")) "Release to tester" } }
+                }
             }
         },
         "agent" => html! {
@@ -1332,10 +1341,18 @@ pub async fn release_held(State(app): State<App>, headers: HeaderMap, User(a): U
     check_csrf(&app, &headers, &a, &f.csrf)?;
     let pid: String = sqlx::query_scalar("SELECT project_id FROM conversations WHERE id=$1").bind(&cid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such conversation"))?;
     domain::require_owner(&app, &pid, &a.id).await?;
-    let e = sqlx::query_as::<_, Event>("UPDATE events SET held=false WHERE conversation_id=$1 AND seq=$2 AND held RETURNING *").bind(&cid).bind(seq).fetch_optional(&app.db).await?;
+    // Released, the event moves to the end with a new sequence number: a tester whose
+    // cursor already passed the held one still gets it.
+    // Taking the next number locks the conversation row, as add_event does.
+    let mut tx = app.db.begin().await?;
+    let next: i64 = sqlx::query_scalar("UPDATE conversations SET last_seq=last_seq+1, updated_at=now() WHERE id=$1 RETURNING last_seq")
+        .bind(&cid).fetch_one(&mut *tx).await?;
+    let e = sqlx::query_as::<_, Event>("UPDATE events SET held=false, seq=$3 WHERE conversation_id=$1 AND seq=$2 AND held RETURNING *")
+        .bind(&cid).bind(seq).bind(next).fetch_optional(&mut *tx).await?;
+    if e.is_some() { tx.commit().await?; } else { tx.rollback().await?; }
     if let Some(e) = e {
         audit(&app, &a.id, &pid, &a.label(), "reply.released", &e.message_id, &seq.to_string()).await;
-        app.wake(&cid, seq);
+        app.wake(&cid, e.seq);
     }
     Ok(Redirect::to(&format!("/conversations/{cid}")).into_response())
 }

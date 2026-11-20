@@ -513,6 +513,10 @@ pub async fn status_block(app: &AppInner, m: &Message, since: i64, tester: bool)
         }
         if e.actor_kind == "agent" || e.actor_kind == "deploy" {
             v["agent_text"] = json!(safety::defang_links(&e.text, &own_host, &p.retest_hosts));
+        } else if let Some(via) = e.data.get("via").and_then(|v| v.as_str()) {
+            // The developer's instruction as the agent summarized it: said so, links defanged.
+            v["text"] = json!(safety::defang_links(&e.text, &own_host, &p.retest_hosts));
+            v["summarized_by"] = json!(via);
         } else {
             v["text"] = json!(e.text);
         }

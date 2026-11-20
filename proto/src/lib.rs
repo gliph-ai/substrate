@@ -108,7 +108,7 @@ pub enum AckStage {
     Failed,
 }
 
-/// What an agent sends back through `substrate progress|ask|reply|deploy`.
+/// What an agent sends back through `substrate progress|ask|reply|note|deploy`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Report {
     pub message_id: String,
@@ -276,8 +276,11 @@ developer asks you to.\n".to_string(),
     }
     s.push_str(&format!(
         "UNTRUSTED {nonce}>>>\n\
+If the developer tells you something in this session while you work on this, send the tester\n\
+a one-line summary of what it changes, in the developer's voice: substrate note {id} --text \"…\".\n\
+Leave out private remarks, secrets and anything not about this request.\n\
 [Report with: substrate progress {id} --text \"…\" · substrate ask {id} --text \"…\" · \
-substrate reply {id} --final --text \"…\" · substrate deploy track {id} --commit <sha>]",
+substrate reply {id} --final --text \"…\" · substrate note {id} --text \"…\" · substrate deploy track {id} --commit <sha>]",
         nonce = e.nonce,
         id = e.message_id
     ));

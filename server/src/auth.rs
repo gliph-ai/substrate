@@ -163,8 +163,11 @@ pub async fn login_post(State(app): State<App>, headers: HeaderMap, Form(f): For
     if app.cfg.dev {
         tracing::warn!(%link, "dev sign-in link");
     }
-    Ok(web::check_email_page(&email).into_response())
+    // The browser that asked holds the link's hash; only there does the link sign in by itself.
+    Ok(([(header::SET_COOKIE, set_cookie(&app, MAGIC_COOKIE, &hash(&t), 15 * 60))], web::check_email_page(&email)).into_response())
 }
+
+const MAGIC_COOKIE: &str = "substrate_magic";
 
 #[derive(Deserialize)]
 pub struct MagicQ {
@@ -173,8 +176,11 @@ pub struct MagicQ {
 
 /// GET shows a button; only the POST spends the link. Mail scanners that
 /// prefetch links then cannot sign anyone in or burn the link.
-pub async fn magic_get(Query(q): Query<MagicQ>) -> Response {
-    web::magic_confirm_page(&q.t).into_response()
+/// The browser that asked for the link (it holds the link's hash in a cookie) signs in
+/// by itself; any other browser, or a scanner, gets only the button.
+pub async fn magic_get(headers: HeaderMap, Query(q): Query<MagicQ>) -> Response {
+    let same_browser = cookie(&headers, MAGIC_COOKIE).is_some_and(|c| c == hash(&q.t));
+    web::magic_confirm_page(&q.t, same_browser).into_response()
 }
 
 pub async fn magic_post(State(app): State<App>, headers: HeaderMap, Form(q): Form<MagicQ>) -> Result<Response, Fail> {

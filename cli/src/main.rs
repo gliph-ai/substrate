@@ -67,6 +67,8 @@ enum Cmd {
     Cancel { id: String },
     /// (For agents) Report progress on a message.
     Progress { id: String, #[arg(long)] text: String },
+    /// (For agents) Tell the tester, as the developer, what the developer changed or asked for in this session.
+    Note { id: String, #[arg(long)] text: String },
     /// (For agents) Ask the tester a question.
     Ask { id: String, #[arg(long)] text: String },
     /// (For agents) Reply to a message. Add --final when the work is done.
@@ -374,6 +376,11 @@ async fn run() -> Result<()> {
             let r = record(&paths, &id)?;
             report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "progress".into(), text: read_text(&text)?, ..Default::default() }).await?;
             println!("Progress sent.");
+        }
+        Cmd::Note { id, text } => {
+            let r = record(&paths, &id)?;
+            report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "note".into(), text: read_text(&text)?, ..Default::default() }).await?;
+            println!("Note sent to the tester as the developer.");
         }
         Cmd::Ask { id, text } => {
             let r = record(&paths, &id)?;

@@ -451,6 +451,12 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             add_event(&app, &m.conversation_id, &m.id, "agent", &agent_name, "final", &text, json!({"message_id": m.id, "attachments": atts, "secret_hits": hits}), held).await?;
             domain::pump(&app, &p.id).await?;
         }
+        "note" => {
+            // The developer's own instructions to the agent in its session, summarized by
+            // the agent: the tester hears them from the developer.
+            let who = domain::account_label(&app, &p.owner_id).await;
+            add_event(&app, &m.conversation_id, &m.id, "developer", &who, "note", &text, json!({"message_id": m.id, "by": who, "via": agent_name, "secret_hits": hits}), held).await?;
+        }
         "deploy" => {
             let d = r.deploy.ok_or_else(|| Fail::new(400, "deploy report without deploy details"))?;
             if !proto::DEPLOY_STAGES.contains(&d.stage.as_str()) {
@@ -466,7 +472,7 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             let line = deploy_line(&clean);
             add_event(&app, &m.conversation_id, &m.id, "deploy", "CI and deploy", "deploy", &line, json!({"message_id": m.id, "deploy": clean}), false).await?;
         }
-        _ => return Err(Fail::new(400, "kind must be progress, ask, reply, final or deploy")),
+        _ => return Err(Fail::new(400, "kind must be progress, ask, reply, final, note or deploy")),
     }
     if held {
         audit(&app, &account, &p.id, &agent_name, "reply.held", &m.id, &hits.join(",")).await;

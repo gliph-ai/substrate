@@ -254,6 +254,24 @@ async fn full_loop_approval_delivery_reply_deploy() {
 
     let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "progress", "text": "Found it in the API handler."})).await;
     assert_eq!(st, 200);
+    // What the developer told the agent reaches the tester as the developer.
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "note", "text": "Also keep the old settings URL working."})).await;
+    assert_eq!(st, 200);
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid})).await["structuredContent"].clone();
+    let note = g["new_events"].as_array().unwrap().iter().find(|e| e["kind"] == "note").cloned().unwrap_or_default();
+    assert_eq!((note["actor"].as_str(), note["text"].as_str()), (Some("developer"), Some("Also keep the old settings URL working.")), "{g}");
+    assert!(note["summarized_by"].is_string(), "{note}");
+    // A note with a secret is held; released, it reaches a tester whose cursor already passed it.
+    let (_, b) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "note", "text": "use key AKIAIOSFODNN7EXAMPLE"})).await;
+    assert_eq!(b["held"], true);
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid})).await["structuredContent"].clone();
+    let cursor = g["seq"].as_i64().unwrap();
+    assert!(!g.to_string().contains("AKIAIOSFODNN7EXAMPLE"));
+    let (cid, held_seq): (String, i64) = sqlx::query_as("SELECT conversation_id, seq FROM events WHERE message_id=$1 AND held").bind(&mid).fetch_one(&t.app.db).await.unwrap();
+    let r = t.form(&w.dev, &format!("/conversations/{cid}/release/{held_seq}"), &[]).await;
+    assert_eq!(r.status(), 303);
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid, "since_seq": cursor})).await["structuredContent"].clone();
+    assert!(g.to_string().contains("AKIAIOSFODNN7EXAMPLE"), "{g}");
     let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "final", "text": "Fixed. Details at https://evil.example/x and https://verna.app/settings"})).await;
     assert_eq!(st, 200);
 
@@ -796,4 +814,16 @@ async fn audit_log_pages_and_trims() {
     domain::housekeeping(&t.app).await.unwrap();
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE account_id=$1").bind(&dev.account).fetch_one(&t.app.db).await.unwrap();
     assert_eq!(left, 120, "the 200-day-old entry is trimmed");
+}
+
+#[tokio::test]
+async fn magic_link_signs_in_by_itself_only_where_it_was_asked_for() {
+    let t = setup().await;
+    let url = format!("{}/auth/magic?t=tok123", t.base);
+    // Another browser or a link scanner: the button only.
+    let page = t.http.get(&url).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("Finish signing in") && !page.contains("data-autosubmit"));
+    // The browser that asked holds the link's hash: it signs in by itself.
+    let page = t.http.get(&url).header("cookie", format!("substrate_magic={}", app::hash("tok123"))).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("data-autosubmit=\"5\""));
 }

@@ -17,7 +17,7 @@ tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
             ▼
         substrate daemon (launchd) ── herdr agent prompt ──▶ the existing agent pane
             ▲                                                   │
-            └──── substrate progress|ask|reply|deploy ◀─────────┘
+            └──── substrate progress|ask|reply|note|deploy ◀────┘
 ```
 
 ## Identities

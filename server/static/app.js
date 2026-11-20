@@ -364,7 +364,7 @@ document.addEventListener("submit", (e) => {
         n = el("div", "msg agent");
         const who = el("div", "who"), p = project();
         if (p && p.developer_avatar) { const av = el("img", "avatar-img"); av.src = p.developer_avatar; av.alt = ""; who.append(av); }
-        who.append((e.name || dev()) + " · developer");
+        who.append((e.name || dev()) + " · developer" + (e.summarized_by ? ", summarized by " + e.summarized_by : ""));
         n.append(who, rich(e.text));
       } else if (e.actor === "deploy") { S.deployText = e.agent_text || ""; continue; }
       else if (e.kind === "stage") { S.stageText = named(e.text); continue; }
