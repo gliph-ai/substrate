@@ -713,6 +713,7 @@ pub async fn api_icon(State(app): State<App>, headers: HeaderMap, Path(handle): 
     sqlx::query("UPDATE projects SET icon=$2, icon_mime=$3, icon_etag=$4 WHERE id=$1")
         .bind(&p.id).bind(body.to_vec()).bind(mime).bind(&etag).execute(&app.db).await?;
     audit(&app, &account, &p.id, &handle, "project.icon", &p.id, &format!("{} bytes", body.len())).await;
+    app.changed(&account);   // open pages and Sidra's /live refetch, and pick up the new ?v= icon URL
     Ok(Json(json!({"ok": true, "etag": etag})))
 }
 
