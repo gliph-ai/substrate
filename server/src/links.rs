@@ -335,7 +335,7 @@ fn created(app: &AppInner, a: &crate::auth::Account, label: &str, secret: &str) 
                     div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } " · Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
                 }
             }
-            div.row { a.btn href="/sessions" { (ic("arrow-left")) "All links" } }
+            div.row { a.btn href="/sessions" { (ic("arrow-left")) "All sessions" } }
         }
     }).into_string()).into_response()
 }

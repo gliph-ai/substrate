@@ -486,3 +486,9 @@ document.addEventListener("submit", (e) => {
   if (!input || !img) return;
   input.addEventListener("change", () => { const f = input.files && input.files[0]; if (f) img.src = URL.createObjectURL(f); });
 })();
+
+// The account menu closes on a click elsewhere or Escape.
+document.addEventListener("click", (e) => {
+  document.querySelectorAll("details.acct[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; });
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.acct[open]").forEach((d) => (d.open = false)); });

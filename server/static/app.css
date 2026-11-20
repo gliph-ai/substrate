@@ -401,3 +401,20 @@ a.me { text-decoration: none; gap: 8px; }
 .card.profile .field input { width: 100%; }
 .card.profile .readonly { padding: 11px 14px; border-radius: 12px; background: var(--card-2); color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .card.profile { grid-template-columns: 1fr; gap: 24px; } }
+
+/* Any icon without its own size stays small. */
+svg.ic { flex: none; }
+/* Account menu, top right. */
+details.acct { position: relative; }
+details.acct summary { list-style: none; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 8px 4px 4px; border-radius: 999px; font-size: 14px; color: var(--text-2); }
+details.acct summary::-webkit-details-marker { display: none; }
+details.acct summary:hover, details.acct[open] summary { background: var(--card-2); color: var(--text); }
+details.acct summary svg { width: 14px; height: 14px; color: var(--faint); transition: transform .15s; }
+details.acct[open] summary svg { transform: rotate(180deg); }
+details.acct .menu { position: absolute; right: 0; top: calc(100% + 8px); min-width: 230px; padding: 6px; border-radius: 14px; background: #14151B; box-shadow: 0 18px 50px #000c, 0 0 0 1px #ffffff12; z-index: 20; display: flex; flex-direction: column; }
+details.acct .menu .who { display: flex; flex-direction: column; padding: 8px 10px 10px; font-size: 14px; border-bottom: 1px solid #ffffff0f; margin-bottom: 4px; overflow-wrap: anywhere; }
+details.acct .menu .who .faint { font-size: 12px; }
+details.acct .menu a, details.acct .menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--text-2); font: inherit; font-size: 14px; text-decoration: none; cursor: pointer; text-align: left; }
+details.acct .menu a:hover, details.acct .menu button:hover { background: var(--card-2); color: var(--text); }
+details.acct .menu svg { width: 15px; height: 15px; }
+details.acct .menu form button:hover { color: var(--red); }
