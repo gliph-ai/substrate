@@ -451,3 +451,31 @@ document.addEventListener("submit", (e) => {
   reload().then(() => { if (location.hash.startsWith("#c_")) open(location.hash.slice(1)); else fresh(); })
     .catch((e) => add([{ seq: -1, actor: "system", text: e.message }]));
 })();
+
+// Audit log: the marker row at the end loads the next 50 when it comes into view.
+(function () {
+  const table = document.getElementById("audit");
+  if (!table || !window.IntersectionObserver) return;
+  let busy = false;
+  const io = new IntersectionObserver(async (entries) => {
+    const hit = entries.find((e) => e.isIntersecting);
+    if (!hit || busy) return;
+    busy = true;
+    const marker = hit.target;
+    io.unobserve(marker);
+    try {
+      const r = await fetch(marker.dataset.more, { headers: { "X-Live": "1" } });
+      if (!r.ok) throw new Error();
+      const t = document.createElement("template");
+      t.innerHTML = await r.text(); // nosemgrep: our own server-rendered rows, escaped by maud
+      marker.replaceWith(t.content);
+      const next = table.querySelector("tr.more");
+      if (next) io.observe(next);
+    } catch (e) {
+      marker.querySelector("td").textContent = "Couldn't load more. Scroll to try again.";
+      io.observe(marker);
+    } finally { busy = false; }
+  }, { rootMargin: "400px" });
+  const first = table.querySelector("tr.more");
+  if (first) io.observe(first);
+})();

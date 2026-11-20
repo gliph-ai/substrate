@@ -585,6 +585,8 @@ pub async fn housekeeping(app: &AppInner) -> Result<(), Fail> {
         app.changed(&p.owner_id);
     }
     sqlx::query("DELETE FROM tokens WHERE expires_at < now() - interval '1 day'").execute(&app.db).await?;
+    // The audit log keeps 180 days.
+    sqlx::query("DELETE FROM audit WHERE created_at < now() - interval '180 days'").execute(&app.db).await?;
     sqlx::query("DELETE FROM pairings WHERE expires_at < now() - interval '1 day'").execute(&app.db).await?;
     Ok(())
 }

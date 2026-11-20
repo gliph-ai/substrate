@@ -1796,20 +1796,44 @@ pub async fn machine_revoke(State(app): State<App>, headers: HeaderMap, User(a):
     Ok(Redirect::to("/machines").into_response())
 }
 
-pub async fn audit_page(State(app): State<App>, User(a): User) -> Result<Response, Fail> {
-    let rows: Vec<(DateTime<Utc>, String, String, String, String, String)> = sqlx::query_as(
-        "SELECT au.created_at, au.actor, au.action, au.target, au.detail, coalesce(p.name,'') FROM audit au LEFT JOIN projects p ON p.id=au.project_id
-         WHERE au.account_id=$1 OR au.project_id IN (SELECT id FROM projects WHERE owner_id=$1) ORDER BY au.created_at DESC LIMIT 300",
-    ).bind(&a.id).fetch_all(&app.db).await?;
+#[derive(Deserialize)]
+pub struct AuditQ {
+    /// Cursor: entries older than this (the last row's created_at and id, "<rfc3339>~<id>").
+    #[serde(default)]
+    before: String,
+    /// Only the rows, for the infinite scroll.
+    #[serde(default)]
+    rows: bool,
+}
+
+const AUDIT_PAGE: i64 = 50;
+
+/// GET /audit: the newest 50 entries; the page loads 50 more as you reach the end.
+pub async fn audit_page(State(app): State<App>, User(a): User, Query(q): Query<AuditQ>) -> Result<Response, Fail> {
+    let (ts, id) = q.before.split_once('~').map(|(t, i)| (DateTime::parse_from_rfc3339(t).ok().map(|d| d.with_timezone(&Utc)), i.to_string())).unwrap_or((None, String::new()));
+    let rows: Vec<(String, DateTime<Utc>, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT au.id, au.created_at, au.actor, au.action, au.target, au.detail, coalesce(p.name,'') FROM audit au LEFT JOIN projects p ON p.id=au.project_id
+         WHERE (au.account_id=$1 OR au.project_id IN (SELECT id FROM projects WHERE owner_id=$1))
+           AND ($2::timestamptz IS NULL OR (au.created_at, au.id) < ($2, $3))
+         ORDER BY au.created_at DESC, au.id DESC LIMIT $4",
+    ).bind(&a.id).bind(ts).bind(&id).bind(AUDIT_PAGE).fetch_all(&app.db).await?;
+    let next = (rows.len() as i64 == AUDIT_PAGE).then(|| rows.last().map(|r| format!("/audit?rows=true&before={}", urlencoding::encode(&format!("{}~{}", r.1.to_rfc3339(), r.0))))).flatten();
+    let body = html! {
+        @for (_, t, actor, action, target, detail, proj) in &rows {
+            tr { td.mono.faint style="white-space:nowrap" { (t.format("%b %d %H:%M:%S")) } td { (proj) } td { (actor) } td.mono { (action) } td.mono.faint { (target) } td.faint { (detail) } }
+        }
+        // The marker the page watches: reaching it loads the next 50.
+        @if let Some(n) = &next { tr.more data-more=(n) { td colspan="6" .faint { "Loading older entries…" } } }
+    };
+    if q.rows {
+        return Ok(Html(body.into_string()).into_response());
+    }
     Ok(Html(layout("Audit log", Some(&a), None, html! {
         div.stack style="padding:12px 0 48px" {
             h1 { "Audit log" }
-            p.muted { "Every approval, mode change, binding, invitation, sign-in, hold and release on your projects." }
-            div.scroll-x { table.audit {
-                @for (t, actor, action, target, detail, proj) in &rows {
-                    tr { td.mono.faint style="white-space:nowrap" { (t.format("%b %d %H:%M:%S")) } td { (proj) } td { (actor) } td.mono { (action) } td.mono.faint { (target) } td.faint { (detail) } }
-                }
-            } }
+            p.muted { "Every approval, mode change, binding, invitation, sign-in, hold and release on your projects. Kept for 180 days." }
+            div.scroll-x { table.audit #audit { (body) } }
+            @if rows.is_empty() { p.muted { "Nothing yet." } }
         }
     }).into_string()).into_response())
 }

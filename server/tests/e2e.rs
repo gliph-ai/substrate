@@ -762,3 +762,28 @@ async fn app_api_code_sign_in_and_dashboard() {
     assert_eq!(other.status(), 200);
     assert_eq!(t.http.get(api("/me")).bearer_auth(&tok).send().await.unwrap().status(), 401, "signed out");
 }
+
+/// The audit log pages 50 at a time with a cursor, and keeps 180 days.
+#[tokio::test]
+async fn audit_log_pages_and_trims() {
+    let t = setup().await;
+    let dev = t.browser("audit@example.com").await;
+    for i in 0..120 {
+        sqlx::query("INSERT INTO audit (id, account_id, actor, action, created_at) VALUES ($1,$2,'me','test.event', now() - make_interval(mins => $3))")
+            .bind(format!("au_{i:03}")).bind(&dev.account).bind(i).execute(&t.app.db).await.unwrap();
+    }
+    sqlx::query("INSERT INTO audit (id, account_id, actor, action, created_at) VALUES ('au_old',$1,'me','old.event', now() - interval '200 days')")
+        .bind(&dev.account).execute(&t.app.db).await.unwrap();
+    let get = |p: String| { let (http, c) = (t.http.clone(), dev.cookie.clone()); async move { http.get(p).header("cookie", c).send().await.unwrap().text().await.unwrap() } };
+    let mut page = get(format!("{}/audit", t.base)).await;
+    let mut seen = page.matches("test.event").count();
+    assert_eq!(seen, 50);
+    while let Some(more) = page.split("data-more=\"").nth(1).map(|s| s.split('"').next().unwrap().replace("&amp;", "&")) {
+        page = get(format!("{}{more}", t.base)).await;
+        seen += page.matches("test.event").count();
+    }
+    assert_eq!(seen, 120, "every entry once, none twice");
+    domain::housekeeping(&t.app).await.unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE account_id=$1").bind(&dev.account).fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(left, 120, "the 200-day-old entry is trimmed");
+}
