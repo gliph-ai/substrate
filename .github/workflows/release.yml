@@ -1,0 +1,82 @@
+# Relay release: when the workspace version in Cargo.toml is one Substrate
+# does not serve yet, build the macOS binaries, publish them to the bucket
+# behind /install, and attach them to a GitHub release v<version>.
+# Bump the version to ship; the same version is never published twice.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, Cargo.lock, cli/**, proto/**, .github/workflows/release.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: substrate-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      new: ${{ steps.v.outputs.new }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: |
+          v=$(awk -F\" '/^version = /{print $2; exit}' Cargo.toml)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          # $v/latest.json is written last, so it marks a complete publish.
+          code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' "https://substrate.gliph.sh/downloads/substrate/$v/latest.json")
+          case "$code" in
+            200) echo "$v is already published"; echo "new=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "new=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "could not tell whether $v is published (HTTP $code)"; exit 1 ;;
+          esac
+
+  build:
+    needs: check
+    if: needs.check.outputs.new == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-
+      # The relay tests use a fake herdr.
+      - run: cargo test -p substrate --locked
+      - run: cli/release.sh --build
+      - uses: actions/upload-artifact@v4
+        with: { name: substrate, path: dist/substrate, if-no-files-found: error }
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.check.outputs.version }}
+      PL_VERSION: 0.1.0-6e5dc8d
+      PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
+      PUSHLEFT_TOKEN: ${{ secrets.PUSHLEFT_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { name: substrate, path: dist/substrate }
+      - run: |
+          sudo curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
+          echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
+          sudo chmod +x /usr/local/bin/pl
+      # GitHub release first, the bucket's completion marker last; every step
+      # overwrites, so a failed run is rerun from the top.
+      - run: |
+          gh release view "v$V" >/dev/null 2>&1 || gh release create "v$V" --title "substrate $V" --target "$GITHUB_SHA" --generate-notes
+          gh release upload "v$V" dist/substrate/* --clobber
+      - run: cli/release.sh --publish
+      - run: curl -fsS "https://substrate.gliph.sh/downloads/substrate/$V/latest.json" | grep -q "\"$V\""

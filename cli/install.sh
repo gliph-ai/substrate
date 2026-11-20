@@ -9,9 +9,13 @@ case "$os" in Darwin) os=darwin ;; Linux) os=linux ;; *) echo "substrate: $os is
 case "$arch" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x86_64 ;; *) echo "substrate: $arch is not supported yet" >&2; exit 1 ;; esac
 name="substrate-$os-$arch"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-echo "Downloading ${name}..."
-curl -fsSL "$BASE/downloads/substrate/latest/$name" -o "$tmp/substrate"
-curl -fsSL "$BASE/downloads/substrate/latest/$name.sha256" -o "$tmp/sum"
+# latest.json names the version; binary and checksum come from that version's
+# folder, so they always match even while a release is going out.
+v=$(curl -fsSL "$BASE/downloads/substrate/latest/latest.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+[ -n "$v" ] || { echo "substrate: could not read the latest version." >&2; exit 1; }
+echo "Downloading ${name} ${v}..."
+curl -fsSL "$BASE/downloads/substrate/$v/$name" -o "$tmp/substrate"
+curl -fsSL "$BASE/downloads/substrate/$v/$name.sha256" -o "$tmp/sum"
 want=$(cut -d' ' -f1 < "$tmp/sum")
 if command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp/substrate" | cut -d' ' -f1); else got=$(sha256sum "$tmp/substrate" | cut -d' ' -f1); fi
 [ "$want" = "$got" ] || { echo "substrate: the checksum does not match. Nothing was installed." >&2; exit 1; }
