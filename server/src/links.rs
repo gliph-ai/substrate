@@ -276,7 +276,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
             div.between {
                 div.row style="gap:14px" { img.avatar-img src=(format!("/accounts/{acct}/avatar")) alt="" style="width:44px;height:44px"; h1 style="margin:0" { (l.label) } }
                 @if live {
-                    form.inline method="post" action=(format!("/sessions/{}/revoke", l.id)) data-confirm="Revoke this link? It stops working at once." {
+                    form.inline method="post" action=(format!("/sessions/{}/revoke", l.id)) data-confirm="Revoke this link? It stops working at once." data-confirm-ok="Revoke" {
                         (csrf(&a)) button.btn.danger type="submit" { (ic("trash")) "Revoke" }
                     }
                 } @else { span.tag.off { @if revoked { "revoked" } @else { "expired" } } }

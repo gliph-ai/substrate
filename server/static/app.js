@@ -39,9 +39,31 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// data-confirm forms ask first, in our own popup. data-confirm-ok names the
+// button; a "Delete"/"Remove"/"Disconnect"-style label makes it red.
 document.addEventListener("submit", (e) => {
-  const msg = e.target.getAttribute("data-confirm");
-  if (msg && !confirm(msg)) e.preventDefault();
+  const f = e.target, msg = f.getAttribute("data-confirm");
+  if (!msg || f.dataset.confirmed) return;
+  e.preventDefault();
+  const d = document.createElement("dialog");
+  d.className = "confirm";
+  const p = document.createElement("p");
+  p.textContent = msg;
+  const row = document.createElement("div");
+  row.className = "row";
+  const no = document.createElement("button");
+  no.type = "button"; no.className = "btn"; no.textContent = "Cancel";
+  const okLabel = f.getAttribute("data-confirm-ok") || "Continue";
+  const ok = document.createElement("button");
+  ok.type = "button"; ok.className = /delete|remove|disconnect|revoke/i.test(okLabel) ? "btn danger" : "btn primary"; ok.textContent = okLabel;
+  row.append(no, ok);
+  d.append(p, row);
+  document.body.append(d);
+  d.addEventListener("close", () => d.remove());
+  no.onclick = () => d.close();
+  ok.onclick = () => { d.close(); f.dataset.confirmed = "1"; f.requestSubmit(e.submitter); };
+  d.showModal();
+  no.focus();
 });
 
 // The orb: a fluid blob. Each frame, its outline is the sum of a few slow

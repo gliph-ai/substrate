@@ -109,6 +109,7 @@ pub fn router(app: App) -> Router {
         .route("/projects/{pid}/members/{aid}/remove", post(web::member_remove))
         .route("/projects/{pid}/members/{aid}/deploy", post(web::member_deploy))
         .route("/projects/{pid}/unlink-gliph", post(web::unlink_gliph))
+        .route("/projects/{pid}/delete", post(web::project_delete))
         .route("/conversations/{cid}", get(web::conversation))
         .route("/conversations/{cid}/live", get(web::conversation_live))
         .route("/conversations/{cid}/answer", post(web::answer))

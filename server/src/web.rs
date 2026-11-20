@@ -564,9 +564,16 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                     div.row style="font-size:19px;font-weight:500" { span.ni { (ic("alert")) } "Agents gone" }
                     div.list style="padding:0;background:transparent" {
                         @for (p, q) in &gone {
-                            a.item href=(format!("/projects/{}", p.id)) {
-                                span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (status_tag(&p.state)) }
-                                span.r { @if *q > 0 { (q) " queued · " } "Move it" }
+                            div.gone-row {
+                                a.item href=(format!("/projects/{}", p.id)) {
+                                    span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (status_tag(&p.state)) }
+                                    span.r { @if *q > 0 { (q) " queued · " } "Move it" }
+                                }
+                                form.inline method="post" action=(format!("/projects/{}/delete", p.id))
+                                    data-confirm=(format!("Delete {}? Its conversations{} and files go too. This cannot be undone.", p.name, if *q > 0 { format!(" and {q} queued messages") } else { String::new() }))
+                                    data-confirm-ok="Delete" {
+                                    (csrf(&a)) button.btn.icon.trash type="submit" title="Delete project" aria-label=(format!("Delete {}", p.name)) { (ic("trash")) }
+                                }
                             }
                         }
                     }
@@ -730,7 +737,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                                                         button.btn.small type="submit" { span class=(format!("tag {}", if on { "ok" } else { "off" })) { (label) } }
                                                     }
                                                 }
-                                                form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
+                                                form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/remove")) data-confirm="Remove this tester? Their queued messages will not be delivered." data-confirm-ok="Remove" { (csrf(&a)) button.btn.small.danger type="submit" { (ic("user-minus")) "Remove" } }
                                             }
                                         }
                                     }
@@ -933,6 +940,20 @@ pub async fn unlink_gliph(State(app): State<App>, headers: HeaderMap, User(a): U
     app.gliph(crate::app::GliphOut::Resubscribe);
     audit(&app, &a.id, &pid, &a.label(), "gliph.unlinked", &pid, "web").await;
     Ok(Redirect::to(&format!("/projects/{pid}?flash=Unlinked+from+Gliph.")).into_response())
+}
+
+/// Delete a project whose agent is gone, instead of waiting for housekeeping.
+pub async fn project_delete(State(app): State<App>, headers: HeaderMap, User(a): User, Path(pid): Path<String>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, &f.csrf)?;
+    domain::require_owner(&app, &pid, &a.id).await?;
+    let p = domain::project(&app, &pid).await?;
+    if !agent_gone(&p.state) {
+        return Err(Fail::new(409, "this project's agent is still there"));
+    }
+    domain::delete_project(&app, &p).await?;
+    audit(&app, &a.id, "", &a.label(), "project.deleted", &p.handle, "web").await;
+    app.changed(&a.id);
+    Ok(Redirect::to("/").into_response())
 }
 
 /// Server-sent "changed" whenever any of these accounts' agents change: the
@@ -1765,7 +1786,7 @@ pub async fn machine_detail(State(app): State<App>, User(a): User, Path(mid): Pa
                         }
                     }
                 }
-                form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." { (csrf(&a)) button.btn.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
+                form.inline method="post" action=(format!("/machines/{mid}/revoke")) data-confirm="Disconnect this computer? Its relay stops and its projects get no messages." data-confirm-ok="Disconnect" { (csrf(&a)) button.btn.danger type="submit" { (ic("monitor-off")) "Disconnect" } }
             }
             @for (space, list) in spaces(&panes) {
                 div.list {
