@@ -1421,14 +1421,19 @@ pub async fn profile(State(app): State<App>, User(a): User, Query(f): Query<Flas
         div.stack style="padding:12px 0 48px" {
             @if let Some(msg) = &f.flash { (notice("ok", html! { (msg) })) }
             h1 { "Profile" }
-            form.card.stack method="post" action="/profile" enctype="multipart/form-data" {
+            form.card.profile method="post" action="/profile" enctype="multipart/form-data" {
                 (csrf(&a))
-                div.row style="gap:16px" {
-                    img.avatar-img src=(format!("/accounts/{}/avatar?t={}", a.id, crate::app::now().timestamp())) alt="" width="64" height="64" style="width:64px;height:64px";
-                    div.field style="flex:1" { label for="av" { "Picture" } input id="av" type="file" name="avatar" accept="image/png,image/jpeg,image/webp"; span.faint style="font-size:12px" { "PNG, JPEG or WebP, 1 MB at most. Testers see it next to your name." } }
+                div.pic {
+                    img.avatar-img #avatar-preview src=(format!("/accounts/{}/avatar?t={}", a.id, crate::app::now().timestamp())) alt="";
+                    label.btn.small for="av" { (ic("upload")) "Change picture" }
+                    input #av .sr type="file" name="avatar" accept="image/png,image/jpeg,image/webp";
+                    span.faint style="font-size:12px;text-align:center" { "PNG, JPEG or WebP, up to 1 MB" }
                 }
-                div.field { label for="nm" { "Name" } input id="nm" type="text" name="name" value=(a.name) maxlength="64" placeholder=(a.label()); }
-                div.row { button.btn.primary type="submit" { (ic("check")) "Save" } }
+                div.stack style="gap:18px;min-width:0" {
+                    div.field { label for="nm" { "Name" } input id="nm" type="text" name="name" value=(a.name) maxlength="64" placeholder=(a.label()); span.faint style="font-size:12px" { "Testers see this name and picture." } }
+                    div.field { label { "Email" } div.readonly { (a.email) } }
+                    div.row { button.btn.primary type="submit" { (ic("check")) "Save" } }
+                }
             }
         }
     }).into_string()).into_response())

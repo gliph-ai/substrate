@@ -479,3 +479,10 @@ document.addEventListener("submit", (e) => {
   const first = table.querySelector("tr.more");
   if (first) io.observe(first);
 })();
+
+// Profile: show the chosen picture before it is saved.
+(function () {
+  const input = document.getElementById("av"), img = document.getElementById("avatar-preview");
+  if (!input || !img) return;
+  input.addEventListener("change", () => { const f = input.files && input.files[0]; if (f) img.src = URL.createObjectURL(f); });
+})();
