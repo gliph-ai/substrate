@@ -266,6 +266,20 @@ document.addEventListener("submit", (e) => {
     log.append(dt.el);
   }
 
+  // A notice: a pill above the composer. Errors are red, have an ×, and go
+  // after a few seconds or on its ×.
+  let noticeTimer = null;
+  function notice(text, kind) {
+    const b = $("chat-banner");
+    clearTimeout(noticeTimer);
+    if (!text) { b.hidden = true; return; }
+    b.className = "chat-banner notice " + (kind || "warn");
+    $("chat-banner-text").textContent = text;
+    $("chat-banner-x").hidden = kind !== "bad";
+    b.hidden = false;
+    if (kind === "bad") noticeTimer = setTimeout(() => notice(S.offlineText || ""), 6000);
+  }
+
   const project = () => S.projects.find((p) => p.project_id === S.pid);
   // The developer by name: "waseem" -> "Waseem". Server notes say "the developer".
   const dev = () => { const d = (project() || {}).developer || ""; return d ? d.charAt(0).toUpperCase() + d.slice(1) : "the developer"; };
