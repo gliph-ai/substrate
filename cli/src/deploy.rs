@@ -39,6 +39,10 @@ pub struct Job {
     pub changed_at: i64,
     #[serde(default)]
     pub run_id: String,
+    /// The CI URL was found by the watcher, not given by the agent: it links, but
+    /// does not pin which pipeline is read.
+    #[serde(default)]
+    pub ci_url_found: bool,
 }
 
 pub fn job_path(p: &Paths, mid: &str) -> PathBuf {
@@ -105,21 +109,32 @@ impl Watcher {
         // (GitHub Actions) or `glab` (GitLab pipeline jobs). A workflow named deploy,
         // release or publish, or a GitLab job in a deploy stage, is the deploy; the rest is CI.
         if matches!(job.stage.as_str(), "fix_committed" | "ci_running" | "ci_passed" | "deploying") {
-            // `gh` first (github.com and GitHub Enterprise); a repo it cannot read goes to `glab`.
-            let runs = gh_runs(&job.cwd, &job.commit).or_else(|| glab_runs(&job.cwd, &job.commit));
+            // `gh` first (github.com and GitHub Enterprise), `glab` when it cannot read the
+            // repo; a CI URL that is not GitHub's picks `glab` first.
+            let (gh, gl) = (|| gh_runs(&job.cwd, &job.commit), || glab_runs(&job.cwd, &job.commit, if job.ci_url_found { "" } else { &job.ci_url }));
+            let runs = if !job.ci_url.is_empty() && !job.ci_url.contains("github") { gl().or_else(gh) } else { gh().or_else(gl) };
             if runs.is_none() && now - job.changed_at < 20 {
                 log(&self.paths, "warn", "deploy watch: neither gh nor glab can read this repo's CI", json!({"message_id": job.message_id, "cwd": job.cwd}));
             }
             let runs = runs.unwrap_or_default();
+            if runs.is_empty() && !job.ci_url_found && pipeline_of(&job.ci_url).is_some() && now - job.changed_at < 20 {
+                log(&self.paths, "warn", "deploy watch: the pipeline given has no jobs for this commit", json!({"message_id": job.message_id, "ci_url": job.ci_url, "commit": job.commit}));
+            }
             if !runs.is_empty() {
                 let is_deploy = |r: &Run| r.deploy || ["deploy", "release", "publish"].iter().any(|k| r.name.to_lowercase().contains(k));
                 let (deploy, ci): (Vec<&Run>, Vec<&Run>) = runs.iter().partition(|r| is_deploy(r));
+                // With an environment tracked, a GitHub run named for another one (staging
+                // while tracking production) is not this deploy. A GitLab job's environment
+                // is not in its API record, so there the target stays unconfirmed: CI is
+                // followed, and the live check (a retest URL) decides the deploy.
+                let deploy: Vec<&Run> = deploy.into_iter().filter(|r| job.env.is_empty() || (!r.gitlab && for_env(&r.name, &job.env))).collect();
                 let done = |r: &Run| r.status == "completed";
                 let failed = |r: &Run| done(r) && !matches!(r.conclusion.as_str(), "success" | "skipped" | "neutral");
                 if let Some(r) = ci.first() {
                     job.run_id = r.id.clone();
                     if job.ci_url.is_empty() {
                         job.ci_url = r.url.clone();
+                        job.ci_url_found = true;
                     }
                 }
                 if let Some(r) = ci.iter().copied().find(|r| failed(r)) {
@@ -180,6 +195,7 @@ pub struct Run {
     pub id: String,
     /// GitLab: the job sits in a deploy stage.
     pub deploy: bool,
+    pub gitlab: bool,
 }
 
 /// Every GitHub Actions run for a commit. `gh run list --commit` matches only a full
@@ -204,13 +220,15 @@ fn gh_runs(cwd: &str, commit: &str) -> Option<Vec<Run>> {
         url: r["url"].as_str().unwrap_or("").into(),
         id: r["databaseId"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
         deploy: false,
+        gitlab: false,
     }).collect())
 }
 
-/// The jobs of the newest GitLab pipeline for a commit, through `glab api` in the
-/// repo (`:id` is the repo's project), every page. Retried jobs are left out by
-/// GitLab. None when `glab` cannot read the repo.
-fn glab_runs(cwd: &str, commit: &str) -> Option<Vec<Run>> {
+/// The jobs of every GitLab pipeline for a commit, through `glab api` in the repo
+/// (`:id` is the repo's project), every page; a trigger job is replaced by the jobs
+/// of the pipeline it started. Retried jobs are left out by GitLab. None when
+/// `glab` cannot read the repo.
+fn glab_runs(cwd: &str, commit: &str, ci_url: &str) -> Option<Vec<Run>> {
     if commit.is_empty() {
         return Some(vec![]);
     }
@@ -224,10 +242,77 @@ fn glab_runs(cwd: &str, commit: &str) -> Option<Vec<Run>> {
         let out = cmd.output().ok().filter(|o| o.status.success())?;
         Some(json_items(&out.stdout))
     };
-    let pipes = api(&format!("projects/:id/pipelines?sha={full}&per_page=100"))?;
-    let Some(p) = pipes.first() else { return Some(vec![]) };
-    let (pid, url) = (p["id"].as_i64().unwrap_or(0), p["web_url"].as_str().unwrap_or(""));
-    Some(api(&format!("projects/:id/pipelines/{pid}/jobs?per_page=100"))?.iter().map(|j| gitlab_run(j, pid, url)).collect())
+    let mut runs = vec![];
+    // (project, pipeline, url, under a deploy-stage trigger, depth)
+    // A tracked pipeline URL is that pipeline. Otherwise newest first: the first per ref
+    // and source is the current one, older ones (a rerun's predecessors) are superseded.
+    let mut seen = std::collections::HashSet::new();
+    // A pipeline the agent named is the one read, and only when it ran this commit;
+    // another commit's pipeline tells nothing, so no runs (the caller logs it).
+    let tracked = pipeline_of(ci_url);
+    if let Some((proj, id)) = &tracked {
+        let p = api(&format!("projects/{proj}/pipelines/{id}"))?;
+        if !p.first().and_then(|p| p["sha"].as_str()).is_some_and(|s| s.starts_with(&full)) {
+            return Some(vec![]);
+        }
+    }
+    let mut todo: Vec<(String, i64, String, bool, u8)> = match tracked {
+        Some((proj, id)) => vec![(proj, id, ci_url.into(), false, 0)],
+        None => api(&format!("projects/:id/pipelines?sha={full}&per_page=100&order_by=id&sort=desc"))?.iter()
+            .filter(|p| p["source"] != "parent_pipeline" && seen.insert(format!("{}|{}", p["ref"], p["source"])))
+            .map(|p| (":id".into(), p["id"].as_i64().unwrap_or(0), p["web_url"].as_str().unwrap_or("").into(), false, 0)).collect(),
+    };
+    while let Some((proj, pid, url, deploy, depth)) = todo.pop() {
+        for j in api(&format!("projects/{proj}/pipelines/{pid}/jobs?per_page=100"))? {
+            let mut r = gitlab_run(&j, pid, &url);
+            r.deploy |= deploy;
+            runs.push(r);
+        }
+        for b in api(&format!("projects/{proj}/pipelines/{pid}/bridges?per_page=100"))? {
+            let d = &b["downstream_pipeline"];
+            match d["id"].as_i64() {
+                // ponytail: two levels of child pipelines; deeper ones count as their trigger.
+                Some(id) if depth < 2 => {
+                    // A multi-project trigger names its project only in the pipeline's URL.
+                    let p = d["project_id"].as_i64().map(|i| i.to_string())
+                        .or_else(|| pipeline_of(d["web_url"].as_str().unwrap_or("")).map(|x| x.0)).unwrap_or(proj.clone());
+                    todo.push((p, id, url.clone(), deploy || is_deploy_stage(&b), depth + 1))
+                }
+                _ => {
+                    let mut r = gitlab_run(&b, pid, &url);
+                    r.deploy |= deploy;
+                    runs.push(r);
+                }
+            }
+        }
+    }
+    Some(runs)
+}
+
+/// Whether a deploy run named `name` can be the deploy to `env`.
+fn for_env(name: &str, env: &str) -> bool {
+    const ENVS: [&[&str]; 5] = [&["production", "prod", "live"], &["staging", "stage"], &["preview", "review"], &["development", "dev"], &["test", "qa", "acceptance"]];
+    let (name, env) = (name.to_lowercase(), env.to_lowercase());
+    let words: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).collect();
+    let group = |e: &str| ENVS.iter().find(|g| g.contains(&e));
+    if env.is_empty() || name.contains(&env) {
+        return true;
+    }
+    let mine = group(&env);
+    !words.iter().any(|w| group(w).is_some_and(|g| Some(g) != mine))
+}
+
+/// The project (URL-encoded path, as the API takes it) and id of a GitLab pipeline
+/// URL: `https://host/group/repo/-/pipelines/42` → ("group%2Frepo", 42).
+fn pipeline_of(url: &str) -> Option<(String, i64)> {
+    let (repo, id) = url.split_once("/-/pipelines/")?;
+    let id = id.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+    let path = repo.split_once("://").map(|x| x.1).unwrap_or(repo).split_once('/')?.1;
+    Some((path.replace('/', "%2F"), id))
+}
+
+fn is_deploy_stage(j: &Value) -> bool {
+    j["stage"].as_str().unwrap_or("").to_lowercase().contains("deploy")
 }
 
 /// `--paginate` prints one JSON array per page back to back: their items, in order.
@@ -236,14 +321,16 @@ fn json_items(bytes: &[u8]) -> Vec<Value> {
         .flat_map(|v| match v { Value::Array(a) => a, v => vec![v] }).collect()
 }
 
-/// A GitLab job as a run: a manual job never started counts as skipped, an
-/// allowed failure as neutral (it fails nothing, and deploys nothing).
+/// A GitLab job as a run. A manual job that may be skipped counts as skipped; a
+/// blocking one (not allowed to fail) holds the pipeline, so it waits. An
+/// allowed failure is neutral: it fails nothing, and deploys nothing.
 fn gitlab_run(j: &Value, pipeline: i64, url: &str) -> Run {
     let st = j["status"].as_str().unwrap_or("");
-    let done = matches!(st, "success" | "failed" | "canceled" | "skipped" | "manual");
+    let optional = j["allow_failure"].as_bool().unwrap_or(false);
+    let done = matches!(st, "success" | "failed" | "canceled" | "skipped") || (st == "manual" && optional);
     let conclusion = match st {
         "success" => "success",
-        "failed" if j["allow_failure"].as_bool().unwrap_or(false) => "neutral",
+        "failed" if optional => "neutral",
         "failed" => "failure",
         "canceled" => "cancelled",
         "skipped" | "manual" => "skipped",
@@ -255,7 +342,8 @@ fn gitlab_run(j: &Value, pipeline: i64, url: &str) -> Run {
         conclusion: conclusion.into(),
         url: url.into(),
         id: pipeline.to_string(),
-        deploy: j["stage"].as_str().unwrap_or("").to_lowercase().contains("deploy"),
+        deploy: is_deploy_stage(j),
+        gitlab: true,
     }
 }
 
@@ -292,8 +380,18 @@ mod tests {
         assert_eq!((r.status.as_str(), r.conclusion.as_str(), r.deploy), ("completed", "success", true));
         assert_eq!(run(serde_json::json!({"status": "failed", "allow_failure": true})).conclusion, "neutral");
         assert_eq!(run(serde_json::json!({"status": "failed"})).conclusion, "failure");
-        assert_eq!(run(serde_json::json!({"status": "manual"})).conclusion, "skipped");
+        let r = run(serde_json::json!({"status": "manual", "allow_failure": true}));
+        assert_eq!((r.status.as_str(), r.conclusion.as_str()), ("completed", "skipped"));
+        assert_eq!(run(serde_json::json!({"status": "manual", "allow_failure": false})).status, "in_progress");
         assert_eq!(run(serde_json::json!({"status": "pending"})).status, "in_progress");
+        assert_eq!(super::pipeline_of("https://git.erip.me/tuli/tuli/-/pipelines/138327"), Some(("tuli%2Ftuli".into(), 138327)));
+        assert_eq!(super::pipeline_of("https://github.com/a/b/actions/runs/1"), None);
+        assert!(super::for_env("pushleft", "production"));
+        assert!(super::for_env("Deploy", "production"));
+        assert!(super::for_env("deploy-prod", "production"));
+        assert!(!super::for_env("deploy-staging", "production"));
+        assert!(!super::for_env("Deploy production", "staging"));
+        assert!(super::for_env("deploy-staging", ""));
         assert_eq!(super::json_items(b"[{\"a\":1},{\"a\":2}]\n[{\"a\":3}]").len(), 3);
     }
 }

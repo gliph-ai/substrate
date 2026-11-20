@@ -1,6 +1,6 @@
 //! APNs pushes to Sidra: one per request that starts waiting for the developer's
 //! approval, with Approve and Reject on the notification (category `substrate.approval`).
-//! Token auth with the team's APNs key: APNS_KEY_P8 (the .p8 file's text), APNS_KEY_ID,
+//! Token auth with the team's APNs key: the .p8 at /secrets/apns.p8 (or APNS_KEY_PATH), APNS_KEY_ID,
 //! APNS_TEAM_ID. Without them nothing is sent.
 
 use std::sync::{Mutex, OnceLock};
@@ -60,7 +60,8 @@ fn jwt() -> Option<String> {
     if let Some((at, t)) = c.as_ref() {
         if at.elapsed() < Duration::from_secs(50 * 60) { return Some(t.clone()); }
     }
-    let t = sign(&std::env::var("APNS_KEY_P8").ok()?, &std::env::var("APNS_KEY_ID").ok()?, &std::env::var("APNS_TEAM_ID").ok()?, chrono::Utc::now().timestamp())?;
+    let path = std::env::var("APNS_KEY_PATH").unwrap_or_else(|_| "/secrets/apns.p8".into());
+    let t = sign(&std::fs::read_to_string(path).ok()?, &std::env::var("APNS_KEY_ID").ok()?, &std::env::var("APNS_TEAM_ID").ok()?, chrono::Utc::now().timestamp())?;
     *c = Some((Instant::now(), t.clone()));
     Some(t)
 }
