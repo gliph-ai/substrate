@@ -11,7 +11,7 @@
 | Files | bucket `files`: `attachments/<id>`, and relay releases in `downloads/substrate/` |
 | DNS | Porkbun CNAME `substrate.gliph.sh` → `substrate--205eb939.apps.pushleft.dev` |
 | Secrets | `SUBSTRATE_SECRET`, `GLIPH_PLUGIN_TOKEN`, `SES_KEY_ID`, `SES_SECRET`, `S3_*`, `AWS_*` (in Pushleft secrets) |
-| Mail | Amazon SES eu-west-1, from `noreply@gliph.sh` (the shared account) |
+| Mail | Amazon SES eu-west-1, from `noreply@substrate.gliph.sh` (the shared account; the subdomain sender makes mail clients show Substrate's icon, not Gliph's) |
 | Gliph | plugin `substrate` (kind agent) on gliph.sh. Gliph runs with `-substrate-callback https://substrate.gliph.sh/auth/gliph/callback`. |
 
 Run one web instance only. The relay hub and the long-poll wakeups are in process memory.

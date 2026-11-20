@@ -1,5 +1,5 @@
 //! Outbound email through Amazon SES v2 (the shared account gliph.sh uses,
-//! sending as noreply@gliph.sh). Unconfigured, it refuses, unless the server
+//! sending as noreply@substrate.gliph.sh). Unconfigured, it refuses, unless the server
 //! runs with SUBSTRATE_DEV=1, where the message is logged instead.
 
 use anyhow::{bail, Result};
@@ -85,7 +85,7 @@ impl Mailer {
     pub fn from_env(dev: bool) -> Mailer {
         let key = std::env::var("SES_KEY_ID").unwrap_or_default();
         let secret = std::env::var("SES_SECRET").unwrap_or_default();
-        let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "Substrate <noreply@gliph.sh>".into());
+        let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "Substrate <noreply@substrate.gliph.sh>".into());
         let region = std::env::var("SES_REGION").unwrap_or_else(|_| "eu-west-1".into());
         let ses = (!key.is_empty() && !secret.is_empty()).then_some((Creds { key_id: key, secret, region }, from));
         let base = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://substrate.gliph.sh".into());

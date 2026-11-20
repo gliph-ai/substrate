@@ -17,7 +17,7 @@ roles:
       PUBLIC_URL: https://substrate.gliph.sh
       GLIPH_URL: https://gliph.sh
       SES_REGION: eu-west-1
-      MAIL_FROM: Substrate <noreply@gliph.sh>
+      MAIL_FROM: Substrate <noreply@substrate.gliph.sh>
       RUST_LOG: info,sqlx=warn
     secrets:
       - { name: SUBSTRATE_SECRET, as: env }
