@@ -40,6 +40,7 @@ static STATIC: &[(&str, &str, &[u8])] = &[
     ("app.css", "text/css; charset=utf-8", include_bytes!("../static/app.css")),
     ("app.js", "text/javascript; charset=utf-8", include_bytes!("../static/app.js")),
     ("favicon.svg", "image/svg+xml", include_bytes!("../static/favicon.svg")),
+    ("og.png", "image/png", include_bytes!("../static/og.png")),
     ("logos/claude.svg", "image/svg+xml", include_bytes!("../static/logos/claude.svg")),
     ("logos/openai.svg", "image/svg+xml", include_bytes!("../static/logos/openai.svg")),
     ("logos/gemini.svg", "image/svg+xml", include_bytes!("../static/logos/gemini.svg")),

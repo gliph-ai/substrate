@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600&display=swap">
+<style>
+  html, body { margin: 0; background: #000; }
+  .card { position: relative; width: 1200px; height: 630px; overflow: hidden; font-family: "Inter Tight", sans-serif; color: #F5F5F7;
+    background: radial-gradient(ellipse 62% 70% at 50% 38%, #0E1A6B 0%, #070A2A 48%, #000 82%); -webkit-font-smoothing: antialiased; }
+  .horizon { position: absolute; left: -12%; right: -12%; top: 498px; height: 1400px; border-radius: 50%; background: #000;
+    box-shadow: 0 -3px 0 #F2F4FF, 0 -12px 44px #6E8CFF, 0 -44px 130px #2D47FF; }
+  .amber { position: absolute; left: 640px; top: 300px; width: 760px; height: 360px; background: radial-gradient(closest-side, #FF8A5B88, #FF8A5B00); }
+  .inner { position: absolute; inset: 0 0 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; text-align: center; }
+  .brand { display: flex; align-items: center; gap: 16px; font-weight: 600; font-size: 34px; letter-spacing: -.02em; }
+  .wrap { filter: drop-shadow(0 0 22px #2E4BFF) drop-shadow(0 0 50px #3A1C8C); display: flex; }
+  .orb { position: relative; width: 64px; height: 64px; border-radius: 50%; overflow: hidden; isolation: isolate;
+    background: conic-gradient(from 20deg, #1E3BFF, #7B2CFF, #FF5FCF, #FFB070, #5FE6FF, #1E3BFF); }
+  .orb::before { content: ""; position: absolute; inset: -20%; mix-blend-mode: screen; transform: rotate(40deg);
+    background: conic-gradient(from 180deg at 55% 60%, #05061A 0deg, #0B1BFF 60deg, #05061A 120deg, #C04BFF 200deg, #05061A 260deg, #7FF0FF 320deg, #05061A 360deg); }
+  .orb::after { content: ""; position: absolute; left: 18%; top: 14%; width: 34%; height: 22%; border-radius: 50%; background: radial-gradient(closest-side, #FFFFFF, #CFD8FF 40%, #5A6BFF00); }
+  h1 { margin: 0; font-weight: 600; font-size: 76px; line-height: 1.02; letter-spacing: -.04em; }
+  .grad { background: linear-gradient(90deg, #8FF0E0, #8FA8FF 55%, #C79BFF); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .url { position: absolute; left: 0; right: 0; top: 548px; text-align: center; font-weight: 500; font-size: 24px; color: #A1A1AA; letter-spacing: -.01em; }
+</style>
+<div class="card">
+  <div class="amber"></div><div class="horizon"></div>
+  <div class="inner">
+    <div class="brand"><img src="../icon/icon.svg" width="64" height="64" style="border-radius:15px;box-shadow:0 0 0 1px #2A2F55, 0 8px 30px #3B5BFF55">Substrate</div>
+    <h1>Let testers talk to<br><span class="grad">your coding agent.</span></h1>
+  </div>
+  <div class="url">substrate.gliph.sh</div>
+</div>

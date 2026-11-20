@@ -30,7 +30,7 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
             body.chat-body {
                 div #chat .chat data-rpc=(rpc) data-csrf=(csrf) {
                     aside.chat-side {
-                        div.chat-brand { a.brand href=(if back { "/" } else { "#" }) { (orb("")) "Substrate" } }
+                        div.chat-brand { a.brand href=(if back { "/" } else { "#" }) { img.mark src="/static/favicon.svg" width="22" height="22" alt=""; "Substrate" } }
                         button.btn #chat-new type="button" { (ic("square-pen")) "New chat" }
                         div.label { (ic("folder")) "Projects" }
                         div #chat-projects {}

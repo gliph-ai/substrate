@@ -294,6 +294,14 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                 title { (title) " · Substrate" }
                 meta name="description" content="Give people a direct line to the agents building your software.";
                 link rel="icon" href="/static/favicon.svg" type="image/svg+xml";
+                link rel="apple-touch-icon" href="/static/logos/substrate.png";
+                // ponytail: crawlers only read production, so the card URL is absolute to it.
+                meta property="og:title" content="Substrate";
+                meta property="og:description" content="Let testers talk to your coding agent.";
+                meta property="og:image" content="https://substrate.gliph.sh/static/og.png";
+                meta property="og:image:width" content="1200";
+                meta property="og:image:height" content="630";
+                meta name="twitter:card" content="summary_large_image";
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
                 link rel="stylesheet" href=(format!("/static/app.css?v={}", crate::asset_v()));
@@ -305,7 +313,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                         div.row style="gap:28px" {
                             // The page you are on is underlined; the wordmark stands for the dashboard.
                             @let cur = acct.map(|_| section_of(title)).unwrap_or("");
-                            a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { (orb("")) "Substrate" }
+                            a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { img.mark src="/static/favicon.svg" width="22" height="22" alt=""; "Substrate" }
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
                                     @for (href, label, icon) in [("/sessions", "Sessions", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
