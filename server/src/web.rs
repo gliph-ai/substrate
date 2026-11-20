@@ -572,7 +572,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                                 form.inline method="post" action=(format!("/projects/{}/delete", p.id))
                                     data-confirm=(format!("Delete {}? Its conversations{} and files go too. This cannot be undone.", p.name, if *q > 0 { format!(" and {q} queued messages") } else { String::new() }))
                                     data-confirm-ok="Delete" {
-                                    (csrf(&a)) button.btn.icon.trash type="submit" title="Delete project" aria-label=(format!("Delete {}", p.name)) { (ic("trash")) }
+                                    (csrf(a)) button.btn.icon.trash type="submit" title="Delete project" aria-label=(format!("Delete {}", p.name)) { (ic("trash")) }
                                 }
                             }
                         }
