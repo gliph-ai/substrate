@@ -291,7 +291,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             let p = domain::project(app, &m.project_id).await?;
             let detail = proto::sanitize(&detail, 300);
             let (stage_s, text, free) = match stage {
-                AckStage::Accepted => ("accepted", "The relay on the developer's computer has it.".to_string(), false),
+                AckStage::Accepted => ("accepted", "The relay on the developer's computer accepted it.".to_string(), false),
                 AckStage::Submitted => ("submitted", format!("Submitted to the agent in herdr pane {}.", p.pane_id), false),
                 AckStage::Working => ("working", "The agent is working on it.".to_string(), false),
                 AckStage::AgentIdle => ("working", "The agent stopped working without sending a reply.".to_string(), true),
