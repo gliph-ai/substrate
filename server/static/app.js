@@ -526,3 +526,22 @@ document.addEventListener("click", (e) => {
   document.querySelectorAll("details.acct[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; });
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.acct[open]").forEach((d) => (d.open = false)); });
+
+// The magic link's "Finish signing in": submits itself after data-autosubmit seconds.
+(function () {
+  const f = document.querySelector("form[data-autosubmit]");
+  if (!f) return;
+  const note = document.querySelector(".autosubmit-note"), count = note && note.querySelector(".count");
+  let n = parseInt(f.getAttribute("data-autosubmit"), 10) || 5;
+  if (note) note.hidden = false;
+  // ponytail: counts only while a person is looking (visible and focused); a scanner
+  // that runs scripts in a background page never reaches 0. Upgrade path if one does:
+  // bind the token to the browser that asked for it.
+  const t = setInterval(() => {
+    if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+    n -= 1;
+    if (count) count.textContent = String(Math.max(n, 0));
+    if (n <= 0) { clearInterval(t); f.submit(); }
+  }, 1000);
+  f.addEventListener("submit", () => clearInterval(t));
+})();

@@ -400,8 +400,11 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: 
     // check and the edit, and the agent never gets the original once an edit is stored.
     let (et, ee) = edit.as_ref().map(|(t, e)| (Some(t.as_str()), Some(e.as_str()))).unwrap_or((None, None));
     let done = sqlx::query("UPDATE messages SET stage=$2, expires_at=$3, delivery_id=CASE WHEN $2='approved' THEN '' ELSE delivery_id END, agent_idle=false,
-            text=COALESCE($4, text), envelope=COALESCE($5, envelope), updated_at=now() WHERE id=$1 AND stage = ANY($6)")
-        .bind(mid).bind(to).bind(expires).bind(et).bind(ee).bind(from).execute(&app.db).await?;
+            text=COALESCE($4, text), envelope=COALESCE($5, envelope), risk=COALESCE($7, risk), updated_at=now() WHERE id=$1 AND stage = ANY($6)")
+        .bind(mid).bind(to).bind(expires).bind(et).bind(ee).bind(from)
+        // The flags describe the text the agent gets. No second warning: the developer wrote the edit.
+        .bind(et.map(|t| safety::risk_flags(t).join(",")))
+        .execute(&app.db).await?;
     if done.rows_affected() == 0 {
         return Err(Fail::new(409, "the message changed meanwhile; reload and decide again"));
     }

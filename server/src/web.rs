@@ -490,7 +490,10 @@ pub fn magic_confirm_page(t: &str) -> Html<String> {
         div.narrow style="padding:64px 0" class="stack" {
             div.card {
                 h1 { "Finish signing in" }
-                form method="post" action="/auth/magic" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { (ic("log-in")) "Sign in" } }
+                // The script signs in by itself after 5 s; the button is there without it.
+                // A link scanner that only fetches the page never posts the form.
+                form method="post" action="/auth/magic" data-autosubmit="5" { input type="hidden" name="t" value=(t); button.btn.primary type="submit" { (ic("log-in")) "Sign in" } }
+                p.muted.autosubmit-note style="margin:0;font-size:14px" hidden { "Signing you in in " span.count { "5" } " s." }
             }
         }
     }).into_string())
