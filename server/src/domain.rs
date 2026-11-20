@@ -363,8 +363,9 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     message(app, &mid).await
 }
 
-/// Owner decisions on a message.
-pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str) -> Result<Message, Fail> {
+/// Owner decisions on a message. `edit` is the developer's rewrite of the
+/// tester's text, taken only with "approve"; the agent gets it in place of the original.
+pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: Option<&str>) -> Result<Message, Fail> {
     let m = message(app, mid).await?;
     let p = require_owner(app, &m.project_id, owner).await?;
     let who = account_label(app, owner).await;
@@ -378,12 +379,39 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str) -> Res
     if !from.contains(&m.stage.as_str()) {
         return Err(Fail::new(409, format!("the message is {} and cannot be {}d now", m.stage.replace('_', " "), action)));
     }
+    let edit = match edit.filter(|_| action == "approve").map(|t| proto::sanitize(t, 8000)) {
+        Some(t) if t.trim().is_empty() => return Err(Fail::new(400, "the edited message is empty")),
+        Some(t) if t.trim() != m.text.trim() => Some(t.trim().to_string()),
+        _ => None,
+    };
+    let edit = match edit {
+        Some(t) if proto::forges_envelope(&t) => return Err(Fail::new(400, "the edit contains text that imitates Substrate's own framing; rephrase it")),
+        Some(t) => {
+            let env = proto::envelope_with_text(&m.envelope, &m.text, &t).ok_or_else(|| Fail::new(409, "this message's prompt cannot be edited"))?;
+            Some((t, env))
+        }
+        None => None,
+    };
     if action == "cancel" && !m.delivery_id.is_empty() {
         app.send_machine(&p.machine_id, CloudFrame::Cancel { delivery_id: m.delivery_id.clone() });
     }
     let expires = if action == "retry" { now() + Duration::days(MESSAGE_TTL_DAYS) } else { m.expires_at };
-    sqlx::query("UPDATE messages SET stage=$2, expires_at=$3, delivery_id=CASE WHEN $2='approved' THEN '' ELSE delivery_id END, agent_idle=false, updated_at=now() WHERE id=$1")
-        .bind(mid).bind(to).bind(expires).execute(&app.db).await?;
+    // One statement, guarded by the stage: a concurrent decision cannot slip between the
+    // check and the edit, and the agent never gets the original once an edit is stored.
+    let (et, ee) = edit.as_ref().map(|(t, e)| (Some(t.as_str()), Some(e.as_str()))).unwrap_or((None, None));
+    let done = sqlx::query("UPDATE messages SET stage=$2, expires_at=$3, delivery_id=CASE WHEN $2='approved' THEN '' ELSE delivery_id END, agent_idle=false,
+            text=COALESCE($4, text), envelope=COALESCE($5, envelope), updated_at=now() WHERE id=$1 AND stage = ANY($6)")
+        .bind(mid).bind(to).bind(expires).bind(et).bind(ee).bind(from).execute(&app.db).await?;
+    if done.rows_affected() == 0 {
+        return Err(Fail::new(409, "the message changed meanwhile; reload and decide again"));
+    }
+    if let Some((t, _)) = &edit {
+        // The developer speaks in the thread: the tester's assistant sees who changed
+        // their words and what the agent got instead.
+        add_event(app, &m.conversation_id, mid, "developer", &who, "edit", &format!("I edited your message before sending it to the agent. The agent got:\n{t}"),
+            json!({"message_id": mid, "by": who}), false).await?;
+        audit(app, owner, &p.id, &who, "message.edit", mid, "").await;
+    }
     add_event(app, &m.conversation_id, mid, "system", "Substrate", "stage", &text, json!({"message_id": mid, "stage": to, "by": who}), false).await?;
     audit(app, owner, &p.id, &who, &format!("message.{action}"), mid, &m.stage).await;
     if to == "approved" {

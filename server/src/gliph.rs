@@ -162,7 +162,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
         }
         "approve" | "reject" => {
             let mid = a1.ok_or("usage: /substrate approve <message id>")?;
-            let m = domain::decide(app, &account, &mid, &sub).await.map_err(fail)?;
+            let m = domain::decide(app, &account, &mid, &sub, None).await.map_err(fail)?;
             Ok(format!("{} {} ({}).", if sub == "approve" { "Approved" } else { "Rejected" }, m.id, m.stage.replace('_', " ")))
         }
         "send" => {

@@ -154,13 +154,15 @@ pub async fn dashboard(State(app): State<App>, headers: HeaderMap) -> Result<Jso
     })))
 }
 
-/// POST /api/v1/messages/{id}/{approve|reject}
-pub async fn decide(State(app): State<App>, headers: HeaderMap, Path((mid, action)): Path<(String, String)>) -> Result<Json<Value>, Fail> {
+/// POST /api/v1/messages/{id}/{approve|reject}. An approve may carry
+/// `{"text": "..."}`: the developer's edit, which the agent gets instead.
+pub async fn decide(State(app): State<App>, headers: HeaderMap, Path((mid, action)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<Value>, Fail> {
     let aid = bearer(&app, &headers).await?;
     if !matches!(action.as_str(), "approve" | "reject") {
         return Err(Fail::new(404, "approve or reject"));
     }
-    let m = domain::decide(&app, &aid, &mid, &action).await?;
+    let b: Value = if body.is_empty() { Value::Null } else { serde_json::from_slice(&body).map_err(|_| Fail::new(400, "the body is not JSON"))? };
+    let m = domain::decide(&app, &aid, &mid, &action, b["text"].as_str()).await?;
     Ok(Json(json!({"id": m.id, "stage": m.stage})))
 }
 
@@ -169,6 +171,7 @@ fn events_json(app: &AppInner, owner: &str, events: &[Event], messages: &[Messag
         let m = messages.iter().find(|m| m.id == e.message_id);
         let avatar = match e.actor_kind.as_str() {
             "human" => m.map(|m| format!("{}/accounts/{}/avatar", app.cfg.public_url, m.sender_id)),
+            "developer" => Some(format!("{}/accounts/{owner}/avatar", app.cfg.public_url)),
             "system" if !e.data["by"].as_str().unwrap_or("").is_empty() => Some(format!("{}/accounts/{owner}/avatar", app.cfg.public_url)),
             _ => None,
         };

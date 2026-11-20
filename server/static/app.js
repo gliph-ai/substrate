@@ -6,12 +6,14 @@
 (function () {
   const el = document.querySelector("[data-live]");
   if (!el || !window.EventSource) return;
-  let busy = false;
+  let busy = false, missed = false;
   const es = new EventSource(el.getAttribute("data-live"));
-  es.onmessage = async () => {
+  const refresh = async () => {
     if (busy) return;
     const a = document.activeElement;
-    if (a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT")) return;
+    // Not while the reader types or holds an unsent edit; catch up once they close it.
+    if ((a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT")) || document.querySelector("details.edit[open]")) { missed = true; return; }
+    missed = false;
     busy = true;
     try {
       const r = await fetch(location.href, { headers: { "X-Live": "1" } });
@@ -25,6 +27,9 @@
       busy = false;
     }
   };
+  es.onmessage = refresh;
+  document.addEventListener("toggle", (e) => { if (missed && e.target.matches && e.target.matches("details.edit") && !e.target.open) refresh(); }, true);
+  document.addEventListener("focusout", () => { if (missed) setTimeout(refresh, 0); });
 })();
 
 document.addEventListener("click", (e) => {
@@ -354,6 +359,13 @@ document.addEventListener("submit", (e) => {
         const who = el("div", "who"), lg = agentLogo(e.name); if (lg) who.append(lg);
         who.append(e.name + (e.kind === "question" ? " asks" : ""));
         n.append(who, rich(e.agent_text), files(e.attachments));
+      } else if (e.actor === "developer") {
+        // The developer speaking in the thread, e.g. the edit they made before approving.
+        n = el("div", "msg agent");
+        const who = el("div", "who"), p = project();
+        if (p && p.developer_avatar) { const av = el("img", "avatar-img"); av.src = p.developer_avatar; av.alt = ""; who.append(av); }
+        who.append((e.name || dev()) + " · developer");
+        n.append(who, rich(e.text));
       } else if (e.actor === "deploy") { S.deployText = e.agent_text || ""; continue; }
       else if (e.kind === "stage") { S.stageText = named(e.text); continue; }
       else n = el("div", "note", named(e.text || e.kind));

@@ -1132,6 +1132,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                             form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { (ic("check")) "Approve" } }
                             form.inline method="post" action=(format!("/messages/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
                         }
+                        (edit_form(a, &format!("/messages/{}/approve", m.id), m, ""))
                     } }
                     @if owner && open { @if let Some(m) = m {
                         @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/messages/{}/cancel", m.id)) { (csrf(a)) button.btn.small.tertiary type="submit" { (ic("x")) "Cancel delivery" } } }
@@ -1151,6 +1152,18 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                 }
             }
         }
+        "developer" => html! {
+            article.card.ev {
+                div.head {
+                    div.who {
+                        img.ev-av src=(format!("/accounts/{}/avatar", p.owner_id)) alt="";
+                        div { div style="font-weight:500" { (e.actor_name) span.role { " · developer" } } }
+                    }
+                    span.time { (hhmm(&e.created_at)) }
+                }
+                div.body style="white-space:pre-wrap" { (text) }
+            }
+        },
         "agent" => html! {
             article class=(if e.held { "card ev danger" } else { "card ev" }) {
                 div.head {
@@ -1227,9 +1240,9 @@ fn envelope_markup(env: &str) -> Markup {
     }
 }
 
-pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<CsrfOnly>) -> Result<Response, Fail> {
+pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<DecideForm>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
-    let m = domain::decide(&app, &a.id, &mid, &action).await?;
+    let m = domain::decide(&app, &a.id, &mid, &action, f.text.as_deref()).await?;
     Ok(Redirect::to(&format!("/conversations/{}", m.conversation_id)).into_response())
 }
 
@@ -1261,6 +1274,7 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                             }
                             div style="white-space:pre-wrap" { (m.text) }
                             details { summary.faint style="font-size:13px;cursor:pointer" { "The prompt the agent gets" } div.envelope { (envelope_markup(&m.envelope)) } }
+                            (edit_form(a, &format!("/approvals/{}/approve", m.id), m, back))
                         }
                         div.row style="flex:none;align-self:flex-start" {
                             form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.primary.small type="submit" { (ic("check")) "Approve" } }
@@ -1274,11 +1288,30 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
     }
 }
 
+/// "Edit before approving": the tester's text in a textarea; submitting it approves
+/// the edited version. No script: a details element opens it.
+fn edit_form(a: &Account, action: &str, m: &Message, back: &str) -> Markup {
+    html! {
+        details.edit {
+            summary.faint style="font-size:13px;cursor:pointer" { "Edit before approving" }
+            form.stack method="post" action=(action) style="gap:8px;margin-top:8px"
+                data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver the edited message to your agent anyway?")] {
+                (csrf(a))
+                @if !back.is_empty() { input type="hidden" name="back" value=(back); }
+                textarea aria-label="The message the agent gets" name="text" rows="6" required maxlength="8000" { (m.text) }
+                div.row { button.btn.primary.small type="submit" { (ic("check")) "Approve edited message" } }
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct DecideForm {
     csrf: String,
     #[serde(default)]
     back: String,
+    /// The developer's edit of the tester's text, sent with Approve.
+    text: Option<String>,
 }
 
 pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<DecideForm>) -> Result<Response, Fail> {
@@ -1286,7 +1319,7 @@ pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a)
     if !matches!(action.as_str(), "approve" | "reject") {
         return Err(Fail::new(404, "no such action"));
     }
-    domain::decide(&app, &a.id, &mid, &action).await?;
+    domain::decide(&app, &a.id, &mid, &action, f.text.as_deref()).await?;
     // Only back to a page of ours.
     let back = if f.back.starts_with('/') && !f.back.starts_with("//") { f.back.as_str() } else { "/" };
     Ok(Redirect::to(back).into_response())

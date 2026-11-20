@@ -740,7 +740,7 @@ fn msg_row(m: &Message) -> Value {
 
 pub async fn api_decide(State(app): State<App>, headers: HeaderMap, Path((mid, action)): Path<(String, String)>) -> Result<Json<Value>, Fail> {
     let (account, _) = machine_auth(&app, &headers).await?;
-    let m = domain::decide(&app, &account, &mid, &action).await?;
+    let m = domain::decide(&app, &account, &mid, &action, None).await?;
     Ok(Json(json!({"id": m.id, "stage": m.stage})))
 }
 

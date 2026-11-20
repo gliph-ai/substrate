@@ -368,7 +368,17 @@ async fn security_boundaries() {
     let (_, _) = t.relay_api(&w.machine, "POST", "/relay/api/projects/verna/mode", json!({"mode": "approve"})).await;
     let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "one more thing"})).await;
     let m4 = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
-    t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{m4}/approve"), json!({})).await;
+    // The developer edits it before approving: the agent's prompt carries the edit, in the same frame.
+    let r = t.form(&w.dev, &format!("/messages/{m4}/approve"), &[("text", "One more thing: the save button is grey.")]).await;
+    assert_eq!(r.status(), 303);
+    let (text, env): (String, String) = sqlx::query_as("SELECT text, envelope FROM messages WHERE id=$1").bind(&m4).fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(text, "One more thing: the save button is grey.");
+    assert!(env.contains("<<<UNTRUSTED ") && env.contains("\nOne more thing: the save button is grey.\nUNTRUSTED ") && !env.contains("one more thing\n"), "{env}");
+    // The tester's assistant hears it from the developer, with the text the agent got.
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": m4})).await["structuredContent"].clone();
+    let ev = g["new_events"].as_array().unwrap().iter().find(|e| e["kind"] == "edit").cloned().unwrap_or_default();
+    assert_eq!(ev["actor"], "developer", "{g}");
+    assert!(ev["text"].as_str().unwrap_or("").contains("the save button is grey"), "{ev}");
     let r = t.form(&w.dev, &format!("/projects/{}/members/{}/remove", w.pid, w.tester.account), &[]).await;
     assert_eq!(r.status(), 303);
     assert_eq!(t.mcp(&w.pat, "list_projects", json!({})).await["structuredContent"]["projects"].as_array().unwrap().len(), 0);

@@ -284,6 +284,16 @@ substrate reply {id} --final --text \"…\" · substrate deploy track {id} --com
     s
 }
 
+/// The same envelope with the untrusted text swapped for `new`: the developer's
+/// edit before approving. The frame, nonce and attachment lines stay as they were.
+/// None if `old` is not the text the envelope was built with.
+pub fn envelope_with_text(env: &str, old: &str, new: &str) -> Option<String> {
+    let open = env.find("\n<<<UNTRUSTED ")? + 1;
+    let body = open + env[open..].find('\n')? + 1;
+    let rest = env[body..].strip_prefix(old)?.strip_prefix('\n')?;
+    Some(format!("{}{new}\n{rest}", &env[..body]))
+}
+
 /// The daemon's check before it types anything: only `\n`, `\t` and the
 /// [`ATTACH_DIR`] placeholder's U+001F may be control characters.
 pub fn envelope_is_safe(env: &str) -> bool {
@@ -313,6 +323,16 @@ pub fn safe_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn envelope_edit_keeps_the_frame() {
+        let e = EnvelopeInput { message_id: "m1", project_handle: "p", project_path: "", sender: "Ann", client: "", text: "the old\ntext",
+            attachments: &["a.png".to_string()], nonce: "N0NCE", deploy: None };
+        let env = envelope(&e);
+        let edited = envelope_with_text(&env, "the old\ntext", "new words").unwrap();
+        assert_eq!(edited, envelope(&EnvelopeInput { text: "new words", ..e }));
+        assert!(envelope_with_text(&env, "not it", "x").is_none());
+    }
 
     #[test]
     fn sanitize_strips_terminal_control() {
