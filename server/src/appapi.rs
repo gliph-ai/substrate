@@ -291,7 +291,7 @@ pub async fn device_add(State(app): State<App>, headers: HeaderMap, Json(b): Jso
     let client_ref: String = b["client_ref"].as_str().unwrap_or("").chars().take(64).collect();
     sqlx::query("INSERT INTO devices (token, account_id, bundle, sandbox, client_ref) VALUES ($1,$2,$3,$4,$5)
                  ON CONFLICT (token) DO UPDATE SET account_id=$2, bundle=$3, sandbox=$4, client_ref=$5")
-        .bind(&token).bind(&aid).bind(&bundle).bind(b["sandbox"].as_bool().unwrap_or(false)).bind(&client_ref).execute(&app.db).await?;
+        .bind(&token).bind(&aid).bind(&bundle).bind(b["sandbox"].as_bool().unwrap_or(b["sandbox"] == "true")).bind(&client_ref).execute(&app.db).await?;
     Ok(Json(json!({"ok": true})))
 }
 

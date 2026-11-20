@@ -101,12 +101,18 @@ impl Watcher {
         if now - job.changed_at > 45 * 60 {
             return self.report(&mut job, "unknown", "no change observed for 45 minutes").await;
         }
-        // CI and deploy: every GitHub Actions run for the commit, through the developer's
-        // own `gh`. A workflow named deploy, release or publish is the deploy; the rest is CI.
-        if matches!(job.stage.as_str(), "fix_committed" | "ci_running" | "ci_passed" | "deploying") && !job.ci_url.contains("gitlab") {
-            let runs = gh_runs(&job.cwd, &job.commit);
+        // CI and deploy: every run for the commit, through the developer's own `gh`
+        // (GitHub Actions) or `glab` (GitLab pipeline jobs). A workflow named deploy,
+        // release or publish, or a GitLab job in a deploy stage, is the deploy; the rest is CI.
+        if matches!(job.stage.as_str(), "fix_committed" | "ci_running" | "ci_passed" | "deploying") {
+            // `gh` first (github.com and GitHub Enterprise); a repo it cannot read goes to `glab`.
+            let runs = gh_runs(&job.cwd, &job.commit).or_else(|| glab_runs(&job.cwd, &job.commit));
+            if runs.is_none() && now - job.changed_at < 20 {
+                log(&self.paths, "warn", "deploy watch: neither gh nor glab can read this repo's CI", json!({"message_id": job.message_id, "cwd": job.cwd}));
+            }
+            let runs = runs.unwrap_or_default();
             if !runs.is_empty() {
-                let is_deploy = |r: &Run| ["deploy", "release", "publish"].iter().any(|k| r.name.to_lowercase().contains(k));
+                let is_deploy = |r: &Run| r.deploy || ["deploy", "release", "publish"].iter().any(|k| r.name.to_lowercase().contains(k));
                 let (deploy, ci): (Vec<&Run>, Vec<&Run>) = runs.iter().partition(|r| is_deploy(r));
                 let done = |r: &Run| r.status == "completed";
                 let failed = |r: &Run| done(r) && !matches!(r.conclusion.as_str(), "success" | "skipped" | "neutral");
@@ -122,7 +128,9 @@ impl Watcher {
                 if !ci.iter().all(|r| done(r)) {
                     return self.report(&mut job, "ci_running", "").await;
                 }
-                if deploy.is_empty() {
+                // Only a deploy run that succeeded is a deploy; one that was skipped,
+                // waits for a manual start or failed allowed is not.
+                if !deploy.iter().any(|r| r.conclusion == "success") && deploy.iter().all(|r| done(r) && !failed(r)) {
                     return self.report(&mut job, "ci_passed", "").await;
                 }
                 if let Some(r) = deploy.iter().copied().find(|r| failed(r)) {
@@ -170,13 +178,16 @@ pub struct Run {
     pub conclusion: String,
     pub url: String,
     pub id: String,
+    /// GitLab: the job sits in a deploy stage.
+    pub deploy: bool,
 }
 
 /// Every GitHub Actions run for a commit. `gh run list --commit` matches only a full
-/// sha, and agents often report a short one, so it is expanded first.
-fn gh_runs(cwd: &str, commit: &str) -> Vec<Run> {
+/// sha, and agents often report a short one, so it is expanded first. None when
+/// `gh` cannot read the repo (not on GitHub, or not logged in).
+fn gh_runs(cwd: &str, commit: &str) -> Option<Vec<Run>> {
     if commit.is_empty() {
-        return vec![];
+        return Some(vec![]);
     }
     let full = full_sha(cwd, commit).unwrap_or_else(|| commit.to_string());
     let mut cmd = Command::new("gh");
@@ -184,15 +195,68 @@ fn gh_runs(cwd: &str, commit: &str) -> Vec<Run> {
     if !cwd.is_empty() {
         cmd.current_dir(cwd);
     }
-    let Some(out) = cmd.output().ok().filter(|o| o.status.success()) else { return vec![] };
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
     let v: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-    v.as_array().into_iter().flatten().map(|r| Run {
+    Some(v.as_array().into_iter().flatten().map(|r| Run {
         name: r["workflowName"].as_str().unwrap_or("").into(),
         status: r["status"].as_str().unwrap_or("").into(),
         conclusion: r["conclusion"].as_str().unwrap_or("").into(),
         url: r["url"].as_str().unwrap_or("").into(),
         id: r["databaseId"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
-    }).collect()
+        deploy: false,
+    }).collect())
+}
+
+/// The jobs of the newest GitLab pipeline for a commit, through `glab api` in the
+/// repo (`:id` is the repo's project), every page. Retried jobs are left out by
+/// GitLab. None when `glab` cannot read the repo.
+fn glab_runs(cwd: &str, commit: &str) -> Option<Vec<Run>> {
+    if commit.is_empty() {
+        return Some(vec![]);
+    }
+    let full = full_sha(cwd, commit).unwrap_or_else(|| commit.to_string());
+    let api = |path: &str| -> Option<Vec<Value>> {
+        let mut cmd = Command::new("glab");
+        cmd.args(["api", "--paginate", path]);
+        if !cwd.is_empty() {
+            cmd.current_dir(cwd);
+        }
+        let out = cmd.output().ok().filter(|o| o.status.success())?;
+        Some(json_items(&out.stdout))
+    };
+    let pipes = api(&format!("projects/:id/pipelines?sha={full}&per_page=100"))?;
+    let Some(p) = pipes.first() else { return Some(vec![]) };
+    let (pid, url) = (p["id"].as_i64().unwrap_or(0), p["web_url"].as_str().unwrap_or(""));
+    Some(api(&format!("projects/:id/pipelines/{pid}/jobs?per_page=100"))?.iter().map(|j| gitlab_run(j, pid, url)).collect())
+}
+
+/// `--paginate` prints one JSON array per page back to back: their items, in order.
+fn json_items(bytes: &[u8]) -> Vec<Value> {
+    serde_json::Deserializer::from_slice(bytes).into_iter::<Value>().map_while(|v| v.ok())
+        .flat_map(|v| match v { Value::Array(a) => a, v => vec![v] }).collect()
+}
+
+/// A GitLab job as a run: a manual job never started counts as skipped, an
+/// allowed failure as neutral (it fails nothing, and deploys nothing).
+fn gitlab_run(j: &Value, pipeline: i64, url: &str) -> Run {
+    let st = j["status"].as_str().unwrap_or("");
+    let done = matches!(st, "success" | "failed" | "canceled" | "skipped" | "manual");
+    let conclusion = match st {
+        "success" => "success",
+        "failed" if j["allow_failure"].as_bool().unwrap_or(false) => "neutral",
+        "failed" => "failure",
+        "canceled" => "cancelled",
+        "skipped" | "manual" => "skipped",
+        _ => "",
+    };
+    Run {
+        name: j["name"].as_str().unwrap_or("").into(),
+        status: if done { "completed" } else { "in_progress" }.into(),
+        conclusion: conclusion.into(),
+        url: url.into(),
+        id: pipeline.to_string(),
+        deploy: j["stage"].as_str().unwrap_or("").to_lowercase().contains("deploy"),
+    }
 }
 
 pub fn full_sha(cwd: &str, commit: &str) -> Option<String> {
@@ -217,5 +281,19 @@ mod tests {
         let full = super::full_sha(d, "HEAD").unwrap();
         assert_eq!(super::full_sha(d, &full[..7]).as_deref(), Some(full.as_str()));
         assert!(super::full_sha(d, "nothere").is_none());
+    }
+
+    #[test]
+    fn gitlab_jobs_map_to_runs() {
+        let run = |v: serde_json::Value| super::gitlab_run(&v, 7, "u");
+        let r = run(serde_json::json!({"name": "api", "stage": "test", "status": "running"}));
+        assert_eq!((r.status.as_str(), r.deploy), ("in_progress", false));
+        let r = run(serde_json::json!({"name": "pushleft", "stage": "deploy", "status": "success"}));
+        assert_eq!((r.status.as_str(), r.conclusion.as_str(), r.deploy), ("completed", "success", true));
+        assert_eq!(run(serde_json::json!({"status": "failed", "allow_failure": true})).conclusion, "neutral");
+        assert_eq!(run(serde_json::json!({"status": "failed"})).conclusion, "failure");
+        assert_eq!(run(serde_json::json!({"status": "manual"})).conclusion, "skipped");
+        assert_eq!(run(serde_json::json!({"status": "pending"})).status, "in_progress");
+        assert_eq!(super::json_items(b"[{\"a\":1},{\"a\":2}]\n[{\"a\":3}]").len(), 3);
     }
 }
