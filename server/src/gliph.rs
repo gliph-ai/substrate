@@ -240,6 +240,7 @@ async fn guest_message(app: &App, p: &Project, label: &str, text: &str) -> Resul
         sqlx::query("UPDATE messages SET stage='pending_approval' WHERE id=$1 AND stage='approved'").bind(&m.id).execute(&app.db).await?;
         domain::add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage",
             "From a Gliph channel member: waiting for the developer's approval.", json!({"message_id": m.id, "stage": "pending_approval"}), false).await?;
+        crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), m.id.clone(), p.name.clone(), label.to_string(), text.to_string(), false);
         return domain::message(app, &m.id).await;
     }
     Ok(m)

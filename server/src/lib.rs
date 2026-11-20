@@ -14,6 +14,7 @@ pub mod links;
 pub mod mail;
 pub mod mcp;
 pub mod oauth;
+pub mod push;
 pub mod relay;
 pub mod safety;
 pub mod web;
@@ -142,6 +143,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/sessions/{sid}", get(appapi::session))
         .route("/api/v1/machines", get(appapi::machines))
         .route("/api/v1/live", get(appapi::live))
+        .route("/api/v1/devices", post(appapi::device_add))
+        .route("/api/v1/devices/{token}", axum::routing::delete(appapi::device_remove))
         .route("/chat", get(chat::page))
         .route("/chat/live", get(chat::live))
         .route("/mcp/{secret}/live", get(chat::link_live))

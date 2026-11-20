@@ -29,6 +29,10 @@ roles:
       - { name: AWS_REGION, as: env }
       - { name: AWS_ACCESS_KEY_ID, as: env }
       - { name: AWS_SECRET_ACCESS_KEY, as: env }
+      # Sidra's approval pushes: the team's APNs key (the .p8 text), its id and the team.
+      - { name: APNS_KEY_P8, as: env }
+      - { name: APNS_KEY_ID, as: env }
+      - { name: APNS_TEAM_ID, as: env }
     databases: [substrate]
     resources: { cpu: 0.5, memory: 512MiB }
     route:

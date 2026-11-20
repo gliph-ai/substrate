@@ -38,6 +38,17 @@ The badge is `counts.waiting` from `/dashboard`, refetched on each `changed`.
 | `POST /messages/{id}/approve` | `{"id", "stage": "approved"}` |
 | `POST /messages/{id}/reject` | `{"id", "stage": "rejected"}` |
 
+## Push
+
+| Call | Answer |
+| --- | --- |
+| `POST /devices` `{token, bundle, sandbox, client_ref}` | `{"ok": true}`. The APNs token (hex); `sandbox` for development-signed builds; `client_ref` comes back in each push. |
+| `DELETE /devices/{token}` | `{"ok": true}`. Call it before `/auth/logout`. |
+
+Each request that starts waiting (`pending_approval` or `held`) sends an alert push to the owner's devices:
+category `substrate.approval`, `apns-collapse-id` `substrate.{message id}`, and `substrateMessage` and
+`substrateConnection` (the `client_ref`) beside `aps`. Tokens APNs refuses as unknown are dropped.
+
 Creating, editing and revoking sessions stay on the web: open `new_session_url` or a session's `web_url`.
 
 ## Shapes

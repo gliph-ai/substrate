@@ -354,6 +354,9 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     };
     add_event(app, &conv, &mid, "system", "Substrate", "stage", &sys, json!({"message_id": mid, "stage": stage}), false).await?;
     audit(app, m.sender_id, &p.id, &format!("{label}{via}"), "message.received", &mid, detail).await;
+    if stage == "pending_approval" || stage == "held" {
+        crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), mid.clone(), p.name.clone(), label.clone(), text.clone(), stage == "held");
+    }
     if stage == "approved" {
         pump(app, &p.id).await?;
     }
