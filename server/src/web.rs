@@ -422,9 +422,9 @@ fn landing() -> Html<String> {
             h2 { "Four steps from chat to fix" }
             div.grid {
                 div.card { span.mono style="color:#8FA8FF;font-size:12px" { "01" } h3 { "Testers ask their assistant" } span.muted { "They tell Claude, ChatGPT or another MCP client. It sends their words and screenshots to Substrate." } }
-                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "Approve on the web, in the CLI or with /substrate approve in Gliph. Auto relay skips this step." } }
+                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "Approve on the web, in the Sidra app, in the CLI or with /substrate approve in Gliph. Rewrite a request first, or go over it with your agent. The tester sees the new version, with your reason when you give one. Auto relay skips this step." } }
                 div.card { span.mono style="color:var(--teal);font-size:12px" { "03" } h3 { "Your agent gets the message" } span.muted { "The relay on your Mac connects out to Substrate and types the message into your Herdr pane. You open no ports." } }
-                div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "Testers hear back" } span.muted { "They get progress, questions and CI and deploy updates, then a note when the fix is ready to retest." } }
+                div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "Testers hear back" } span.muted { "They get progress, questions, notes from you about the work, and CI and deploy updates, then a note when the fix is ready to retest." } }
             }
         }
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
