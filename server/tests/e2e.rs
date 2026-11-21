@@ -90,10 +90,14 @@ impl T {
     }
 
     async fn ws(&self, tok: &str, panes: Vec<Pane>) -> Ws {
+        self.ws_v(tok, panes, "0.1.0").await
+    }
+
+    async fn ws_v(&self, tok: &str, panes: Vec<Pane>, version: &str) -> Ws {
         let mut req = format!("{}/relay/ws", self.base.replace("http", "ws")).into_client_request().unwrap();
         req.headers_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
         let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
-        send(&mut ws, DaemonFrame::Hello { version: "0.1.0".into(), protocol: PROTOCOL, panes }).await;
+        send(&mut ws, DaemonFrame::Hello { version: version.into(), protocol: PROTOCOL, panes }).await;
         match next(&mut ws).await { CloudFrame::Welcome { .. } => {}, f => panic!("expected welcome, got {f:?}") }
         ws
     }
@@ -144,6 +148,8 @@ async fn deliver(ws: &mut Ws) -> (String, String, String, String) {
         match next(ws).await {
             CloudFrame::Deliver { delivery_id, message_id, envelope, reply_token, .. } => return (delivery_id, message_id, envelope, reply_token),
             CloudFrame::Bindings { .. } => continue,
+            // A review that closed cancels its delivery on the relay.
+            CloudFrame::Cancel { .. } => continue,
             f => panic!("expected deliver, got {f:?}"),
         }
     }
@@ -826,4 +832,80 @@ async fn magic_link_signs_in_by_itself_only_where_it_was_asked_for() {
     // The browser that asked holds the link's hash: it signs in by itself.
     let page = t.http.get(&url).header("cookie", format!("substrate_magic={}", app::hash("tok123"))).send().await.unwrap().text().await.unwrap();
     assert!(page.contains("data-autosubmit=\"5\""));
+}
+
+#[tokio::test]
+async fn review_with_the_agent_then_approve_the_adjusted_request() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle")]).await;
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "Make the save button red and also blue.", "idempotency_key": "rv1"})).await;
+    let mid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+
+    // An older relay cannot take a review: it would swallow the real delivery after it.
+    let r = t.form(&w.dev, &format!("/messages/{mid}/review"), &[]).await;
+    assert_eq!(r.status(), 409);
+    drop(ws);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    ws = t.ws_v(&w.machine, vec![pane("w1:p1", "s1", "idle")], "0.1.15").await;
+
+    // Review: the agent gets the request framed review-only, with no deploy.
+    let r = t.form(&w.dev, &format!("/messages/{mid}/review"), &[]).await;
+    assert_eq!(r.status(), 303);
+    async fn review_frame(ws: &mut Ws) -> (String, String, String) {
+        loop {
+            match next(ws).await {
+                CloudFrame::Deliver { delivery_id, envelope, reply_token, review, deploy, .. } => { assert!(review); assert_eq!(deploy, "none"); return (delivery_id, envelope, reply_token) }
+                CloudFrame::Bindings { .. } => continue,
+                f => panic!("expected the review, got {f:?}"),
+            }
+        }
+    }
+    let (did, env, _) = review_frame(&mut ws).await;
+    // A reconnect re-sends the review under the same delivery id, with a new token.
+    drop(ws);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut ws = t.ws_v(&w.machine, vec![pane("w1:p1", "s1", "idle")], "0.1.15").await;
+    let (did2, _, reply) = review_frame(&mut ws).await;
+    assert_eq!(did, did2);
+    assert!(env.starts_with(&format!("[SUBSTRATE REVIEW {mid}]")) && env.contains("red and also blue") && env.contains(&format!("substrate propose {mid}")), "{env}");
+    assert_eq!(t.stage(&mid).await, "reviewing");
+    let page = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("In review with your agent") && !page.contains(&format!("/approvals/{mid}/approve")), "no approve while in review");
+    let (st, _) = t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{mid}/approve"), json!({})).await;
+    assert_eq!(st, 409, "nor through the API");
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid})).await["structuredContent"].clone();
+    assert!(g["summary"].as_str().unwrap().contains("going over your request"), "{g}");
+
+    // A reply in a review is refused: the agent only proposes.
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "final", "text": "done"})).await;
+    assert_eq!(st, 409);
+    // The agent sends back what the developer and it agreed. The tester does not see it yet.
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": "propose",
+        "text": "Make the save button red.", "why": "A button cannot be red and blue at once; red matches the other primary buttons."})).await;
+    assert_eq!(st, 200);
+    assert_eq!(t.stage(&mid).await, "pending_approval");
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid})).await["structuredContent"].clone();
+    assert!(!g.to_string().contains("Make the save button red."), "{g}");
+    let page = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("Approve adjusted"), "the dashboard offers the reviewed version");
+    // The review's token is spent: no second propose, no reply before approval.
+    for kind in ["propose", "final"] {
+        let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": mid, "reply_token": reply, "kind": kind, "text": "x"})).await;
+        assert_eq!(st, 403);
+    }
+
+    // An approval without its own text (the CLI's) approves the reviewed version.
+    let (st, _) = t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{mid}/approve"), json!({})).await;
+    assert_eq!(st, 200);
+    let (_, dmid, env, _) = deliver(&mut ws).await;
+    assert_eq!(dmid, mid);
+    assert!(env.contains("Make the save button red.\n") && !env.contains("also blue") && !env.contains("SUBSTRATE REVIEW"), "{env}");
+
+    // The tester hears the adjusted request from the developer, with why.
+    let g = t.mcp(&w.pat, "get_message", json!({"message_id": mid})).await["structuredContent"].clone();
+    let edit = g["new_events"].as_array().unwrap().iter().find(|e| e["kind"] == "edit").expect("edit event").clone();
+    assert_eq!(edit["actor"], "developer");
+    let text = edit["text"].as_str().unwrap();
+    assert!(text.contains("I adjusted your request") && text.contains("red and blue at once") && text.contains("Make the save button red."), "{text}");
 }

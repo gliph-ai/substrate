@@ -57,6 +57,7 @@ Each delivered message ends with these commands and its message id. Run them in 
 |---|---|
 | `substrate progress <id> --text "…"` | Posts progress at real milestones. |
 | `substrate note <id> --text "…"` | Tells the tester, as the developer, what the developer changed or asked for in the agent's session. |
+| `substrate propose <id> --text "…" --why "…"` | In a review only: sends the request as the developer and the agent agreed it, and a line for the tester on why it changed. It waits for the developer's approval. |
 | `substrate ask <id> --text "…"` | Sends a question to the tester. The answer comes as a new message. |
 | `substrate reply <id> --final --text "…" [--attach file]` | Sends the final reply: the changes, the tests and the open items. |
 | `substrate deploy track <id> --commit <sha> [--verify-url URL] [--expect-sha]` | Tracks CI (`gh`) and the live URL, and reports each stage. |

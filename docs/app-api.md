@@ -35,8 +35,9 @@ The badge is `counts.waiting` from `/dashboard`, refetched on each `changed`.
 
 | Call | Answer |
 | --- | --- |
-| `POST /messages/{id}/approve` | `{"id", "stage": "approved"}` |
+| `POST /messages/{id}/approve` `[{"text", "why"}]` | `{"id", "stage": "approved"}`. With `text`, the agent gets that instead of the tester's text, and the tester sees it from the developer, with `why` when given. To approve a reviewed request, send its `proposal.text` and `proposal.why`. 400 when the text is empty or imitates Substrate's framing; 409 when the message moved on. |
 | `POST /messages/{id}/reject` | `{"id", "stage": "rejected"}` |
+| `POST /messages/{id}/review` | `{"id", "stage": "reviewing"}`. Sends the request to the project's agent, review only, so the developer can go over it with the agent in its session. The agent sends the agreed version back with `substrate propose`; the message then waits again, with `proposal` set. Call again to resend. 409 when the agent is offline or its relay is older than 0.1.15. |
 
 ## Push
 
@@ -45,7 +46,7 @@ The badge is `counts.waiting` from `/dashboard`, refetched on each `changed`.
 | `POST /devices` `{token, bundle, sandbox, client_ref}` | `{"ok": true}`. The APNs token (hex); `sandbox` for development-signed builds; `client_ref` comes back in each push. |
 | `DELETE /devices/{token}` | `{"ok": true}`. Call it before `/auth/logout`. |
 
-Each request that starts waiting (`pending_approval` or `held`) sends an alert push to the owner's devices:
+Each request that starts waiting (`pending_approval` or `held`), and each reviewed request that comes back, sends an alert push to the owner's devices:
 category `substrate.approval`, `apns-collapse-id` `substrate.{message id}`, and `substrateMessage` and
 `substrateConnection` (the `client_ref`) beside `aps`. Tokens APNs refuses as unknown are dropped.
 
@@ -54,11 +55,12 @@ Creating, editing and revoking sessions stay on the web: open `new_session_url` 
 ## Shapes
 
 **Message**: `id`, `conversation_id`, `kind` (feedback, question, task, answer), `text`, `stage`
-(pending_approval, held, approved, dispatched, accepted, submitted, working, awaiting_sender,
+(pending_approval, held, reviewing, approved, dispatched, accepted, submitted, working, awaiting_sender,
 completed, rejected, cancelled, expired, failed, interrupted, uncertain), `deploy_stage` (null or
 committing, running_checks, pushing, fix_committed, ci_running, ci_passed, ci_failed, deploying,
 deployed, deploy_failed, verified, ready_to_retest, not_deploying, unknown), `deploy_allow`
-(none, test, production), `risk` (comma-separated flags; non-empty means held), `client`,
+(none, test, production), `risk` (comma-separated flags; non-empty means held), `proposal` (null, or
+`{text, why}`: the request as agreed in a review, to approve), `client`,
 `sender` `{id, name, avatar_url}`, `project` (Project), `created_at`, `updated_at`, `web_url`;
 `prompt` (the exact text the agent gets) on waiting messages and in a conversation.
 

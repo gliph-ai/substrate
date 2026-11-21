@@ -156,13 +156,13 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
         }
         "status" => {
             let p = resolve(app, &account, a1.as_deref(), channel).await?;
-            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&p.id).fetch_one(&app.db).await.unwrap_or(0);
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','reviewing')").bind(&p.id).fetch_one(&app.db).await.unwrap_or(0);
             Ok(format!("{}: agent {} ({}), relay {}, {} waiting for approval, {}.", p.name, crate::relay::agent_label(&p.agent), p.state.replace('_', " "),
                 if app.machine_online(&p.machine_id) { "online" } else { "offline" }, waiting, if p.auto_active() { "auto relay on" } else { "approval required" }))
         }
         "approve" | "reject" => {
             let mid = a1.ok_or("usage: /substrate approve <message id>")?;
-            let m = domain::decide(app, &account, &mid, &sub, None).await.map_err(fail)?;
+            let m = domain::decide(app, &account, &mid, &sub, None, None).await.map_err(fail)?;
             Ok(format!("{} {} ({}).", if sub == "approve" { "Approved" } else { "Rejected" }, m.id, m.stage.replace('_', " ")))
         }
         "send" => {

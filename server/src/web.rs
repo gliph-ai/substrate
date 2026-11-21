@@ -183,6 +183,7 @@ fn stage_tag(stage: &str) -> Markup {
     let (cls, label) = match stage {
         "pending_approval" => ("warn", "waiting for approval"),
         "held" => ("bad", "held"),
+        "reviewing" => ("warn", "in review"),
         "approved" => ("", "queued"),
         "dispatched" | "accepted" => ("", "with the relay"),
         "submitted" | "working" => ("ok", "agent working"),
@@ -207,7 +208,7 @@ pub(crate) fn notice(kind: &str, body: Markup) -> Markup {
 }
 
 /// Stages of a message that still waits to reach an agent.
-const QUEUED: &[&str] = &["pending_approval", "held", "approved", "dispatched"];
+const QUEUED: &[&str] = &["pending_approval", "held", "reviewing", "approved", "dispatched"];
 
 /// No agent receives the project's messages right now.
 pub fn agent_gone(state: &str) -> bool {
@@ -532,7 +533,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
         "SELECT p.id, p.name, acc.email, p.icon_etag FROM members m JOIN projects p ON p.id=m.project_id JOIN accounts acc ON acc.id=p.owner_id WHERE m.account_id=$1 AND m.role='tester' ORDER BY p.name",
     ).bind(&a.id).fetch_all(&app.db).await?;
     let approvals = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.sender_id, m.order_n",
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held','reviewing') ORDER BY m.sender_id, m.order_n",
     ).bind(&a.id).fetch_all(&app.db).await?;
     // Active: with the agent, waiting on a tester's answer, or still on its way to production.
     let active = sqlx::query_as::<_, Message>(
@@ -637,7 +638,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
          FROM conversations c LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=c.id ORDER BY order_n DESC LIMIT 1) m ON true
          WHERE c.project_id=$1 AND ($2 OR c.sender_id=$3) ORDER BY c.updated_at DESC LIMIT 50",
     ).bind(&pid).bind(owner).bind(&a.id).fetch_all(&app.db).await?;
-    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&pid).fetch_one(&app.db).await?;
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','reviewing')").bind(&pid).fetch_one(&app.db).await?;
     let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage = ANY($2)").bind(&pid).bind(QUEUED).fetch_one(&app.db).await?;
     let candidates = if owner && agent_gone(&p.state) { rebind_candidates(&app, &a.id, &p).await? } else { vec![] };
     let held: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage='held'").bind(&pid).fetch_one(&app.db).await?;
@@ -1115,7 +1116,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
         "system" => {
             let stage = e.data["stage"].as_str().unwrap_or("");
             let open = m.map(|m| m.stage == stage).unwrap_or(false);
-            let attention = owner && open && (stage == "pending_approval" || stage == "held");
+            let attention = owner && open && matches!(stage, "pending_approval" | "held" | "reviewing");
             html! {
                 article class=(if attention { "card ev attention" } else { "ev-line" }) {
                     div.head { span.who {
@@ -1131,13 +1132,15 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                     div.body style="color:var(--text-2)" { (text) }
                     @if attention { @if let Some(m) = m {
                         @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
-                        p.muted style="margin:0;font-size:14px" { "Your agent gets this text:" }
+                        p.muted style="margin:0;font-size:14px" { @if m.proposal.is_empty() { "Your agent gets this text:" } @else { "The tester's original prompt. Approve adjusted sends the adjusted request instead." } }
                         div.envelope { (envelope_markup(&m.envelope)) }
+                        (review_part(m))
                         div.row {
-                            form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) button.btn.primary type="submit" { (ic("check")) "Approve" } }
+                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) (proposal_fields(m)) button.btn.primary type="submit" { (ic("check")) (approve_label(m)) } } }
                             form.inline method="post" action=(format!("/messages/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
+                            (review_button(a, &format!("/messages/{}/review", m.id), m, ""))
                         }
-                        (edit_form(a, &format!("/messages/{}/approve", m.id), m, ""))
+                        @if m.stage != "reviewing" { (edit_form(a, &format!("/messages/{}/approve", m.id), m, "")) }
                     } }
                     @if owner && open { @if let Some(m) = m {
                         @if matches!(m.stage.as_str(), "approved" | "dispatched" | "accepted") { form.inline method="post" action=(format!("/messages/{}/cancel", m.id)) { (csrf(a)) button.btn.small.tertiary type="submit" { (ic("x")) "Cancel delivery" } } }
@@ -1254,7 +1257,7 @@ fn envelope_markup(env: &str) -> Markup {
 
 pub async fn message_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<DecideForm>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
-    let m = domain::decide(&app, &a.id, &mid, &action, f.text.as_deref()).await?;
+    let m = domain::decide(&app, &a.id, &mid, &action, f.text.as_deref(), f.why.as_deref()).await?;
     Ok(Redirect::to(&format!("/conversations/{}", m.conversation_id)).into_response())
 }
 
@@ -1285,12 +1288,14 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                                 @else if m.deploy_allow == "test" { span.tag.blue { "deploys to test" } }
                             }
                             div style="white-space:pre-wrap" { (m.text) }
-                            details { summary.faint style="font-size:13px;cursor:pointer" { "The prompt the agent gets" } div.envelope { (envelope_markup(&m.envelope)) } }
-                            (edit_form(a, &format!("/approvals/{}/approve", m.id), m, back))
+                            details { summary.faint style="font-size:13px;cursor:pointer" { @if m.proposal.is_empty() { "The prompt the agent gets" } @else { "The tester's original prompt" } } div.envelope { (envelope_markup(&m.envelope)) } }
+                            (review_part(m))
+                            @if m.stage != "reviewing" { (edit_form(a, &format!("/approvals/{}/approve", m.id), m, back)) }
                         }
                         div.row style="flex:none;align-self:flex-start" {
-                            form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.primary.small type="submit" { (ic("check")) "Approve" } }
+                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); (proposal_fields(m)) button.btn.primary.small type="submit" { (ic("check")) (approve_label(m)) } } }
                             form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
+                            (review_button(a, &format!("/approvals/{}/review", m.id), m, back))
                             a.btn.small.tertiary href=(format!("/conversations/{}", m.conversation_id)) title="Conversation" { (ic("eye")) }
                         }
                     }
@@ -1303,16 +1308,55 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
 /// "Edit before approving": the tester's text in a textarea; submitting it approves
 /// the edited version. No script: a details element opens it.
 fn edit_form(a: &Account, action: &str, m: &Message, back: &str) -> Markup {
+    let proposed = !m.proposal.is_empty();
     html! {
-        details.edit {
-            summary.faint style="font-size:13px;cursor:pointer" { "Edit before approving" }
+        details.edit open[proposed] {
+            summary.faint style="font-size:13px;cursor:pointer" { @if proposed { "Edit the adjusted request" } @else { "Edit before approving" } }
             form.stack method="post" action=(action) style="gap:8px;margin-top:8px"
                 data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver the edited message to your agent anyway?")] {
                 (csrf(a))
                 @if !back.is_empty() { input type="hidden" name="back" value=(back); }
-                textarea aria-label="The message the agent gets" name="text" rows="6" required maxlength="8000" { (m.text) }
+                textarea aria-label="The message the agent gets" name="text" rows="6" required maxlength="8000" { @if proposed { (m.proposal) } @else { (m.text) } }
+                textarea aria-label="Why it changed, for the tester" name="why" rows="2" maxlength="1000" placeholder="Why it changed, for the tester (optional)" { (m.proposal_why) }
                 div.row { button.btn.primary.small type="submit" { (ic("check")) "Approve edited message" } }
             }
+        }
+    }
+}
+
+/// While a review is on, and once the agent proposed the agreed request: what the
+/// developer approves next.
+fn review_part(m: &Message) -> Markup {
+    html! {
+        @if m.stage == "reviewing" {
+            div.notice.warn role="status" { span.ni { (ic("terminal")) } div.nb { "In review with your agent. Talk it over in the agent's session; when you agree, the agent sends the adjusted request here to approve." } }
+        } @else if !m.proposal.is_empty() {
+            div.stack style="gap:6px" {
+                span.faint style="font-size:13px" { "Adjusted in review. The agent gets this, and the tester sees it from you:" }
+                div style="white-space:pre-wrap" { (m.proposal) }
+                @if !m.proposal_why.is_empty() { div.faint style="white-space:pre-wrap;font-size:14px" { "Why: " (m.proposal_why) } }
+            }
+        }
+    }
+}
+
+/// Approve carries the reviewed request when there is one, so one click approves
+/// what was agreed, not the tester's original.
+fn proposal_fields(m: &Message) -> Markup {
+    html! { @if !m.proposal.is_empty() { input type="hidden" name="text" value=(m.proposal); input type="hidden" name="why" value=(m.proposal_why); } }
+}
+
+fn approve_label(m: &Message) -> &'static str {
+    if m.proposal.is_empty() { "Approve" } else { "Approve adjusted" }
+}
+
+fn review_button(a: &Account, action: &str, m: &Message, back: &str) -> Markup {
+    html! {
+        form.inline method="post" action=(action)
+            data-confirm=[(m.stage == "reviewing").then_some("Send the request to your agent for review again?")] {
+            (csrf(a))
+            @if !back.is_empty() { input type="hidden" name="back" value=(back); }
+            button.btn.small.tertiary type="submit" title="Send it to your agent to go over together before you approve" { (ic("terminal")) @if m.stage == "reviewing" { "Review again" } @else { "Review with agent" } }
         }
     }
 }
@@ -1324,14 +1368,16 @@ pub struct DecideForm {
     back: String,
     /// The developer's edit of the tester's text, sent with Approve.
     text: Option<String>,
+    /// The developer's line to the tester on why it changed.
+    why: Option<String>,
 }
 
 pub async fn approval_action(State(app): State<App>, headers: HeaderMap, User(a): User, Path((mid, action)): Path<(String, String)>, Form(f): Form<DecideForm>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, &f.csrf)?;
-    if !matches!(action.as_str(), "approve" | "reject") {
+    if !matches!(action.as_str(), "approve" | "reject" | "review") {
         return Err(Fail::new(404, "no such action"));
     }
-    domain::decide(&app, &a.id, &mid, &action, f.text.as_deref()).await?;
+    domain::decide(&app, &a.id, &mid, &action, f.text.as_deref(), f.why.as_deref()).await?;
     // Only back to a page of ours.
     let back = if f.back.starts_with('/') && !f.back.starts_with("//") { f.back.as_str() } else { "/" };
     Ok(Redirect::to(back).into_response())

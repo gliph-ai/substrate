@@ -93,11 +93,11 @@ fn bind(h: &H, projects: &[(&str, &str, &str)]) {
 }
 
 fn deliver(h: &H, mid: &str, pid: &str, env: &str, atts: Vec<AttachmentRef>) {
-    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: env.into(), reply_token: "rt".into(), attachments: atts, deploy: "none".into() });
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: env.into(), reply_token: "rt".into(), attachments: atts, deploy: "none".into(), review: false });
 }
 
 fn deliver_allowing(h: &H, mid: &str, pid: &str, allow: &str) {
-    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: "fix it".into(), reply_token: "rt".into(), attachments: vec![], deploy: allow.into() });
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: format!("d_{mid}"), message_id: mid.into(), project_id: pid.into(), envelope: "fix it".into(), reply_token: "rt".into(), attachments: vec![], deploy: allow.into(), review: false });
 }
 
 async fn tick(h: &H) {
@@ -226,7 +226,7 @@ async fn duplicate_delivery_is_typed_once() {
     deliver(&h, "m1", "p1", "hi", vec![]);
     tick(&h).await;
     // The cloud re-sends after a reconnect, with a new delivery id.
-    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_new".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt2".into(), attachments: vec![], deploy: "none".into() });
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_new".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt2".into(), attachments: vec![], deploy: "none".into(), review: false });
     tick(&h).await;
     assert_eq!(h.herdr.prompts().len(), 1);
     assert_eq!(acks(&drain(&mut h), "d_new"), vec![AckStage::Submitted]);
@@ -299,7 +299,7 @@ async fn reconnect_over_a_real_socket() {
             let welcome = CloudFrame::Welcome { machine_id: "mc".into(), projects: vec![Binding { project_id: "p1".into(), handle: "p1".into(), pane_id: "w1:p1".into(), agent_session: "s1".into(), cwd: "/w".into(), has_icon: true, has_description: true }] };
             ws.send(serde_json::to_string(&welcome).unwrap().into()).await.unwrap();
             if round == 0 {
-                let d = CloudFrame::Deliver { delivery_id: "d1".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt".into(), attachments: vec![], deploy: "none".into() };
+                let d = CloudFrame::Deliver { delivery_id: "d1".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "hi".into(), reply_token: "rt".into(), attachments: vec![], deploy: "none".into(), review: false };
                 ws.send(serde_json::to_string(&d).unwrap().into()).await.unwrap();
             }
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(2500);
@@ -359,4 +359,32 @@ async fn guard_blocks_deploys_the_tester_may_not_make() {
     h.herdr.set("w1:p1", "s1", "idle");
     tick(&h).await;
     assert!(hook("git push", "s1", "/w").is_ok(), "free once the agent is idle");
+}
+
+#[tokio::test]
+async fn review_then_the_real_delivery_both_reach_the_agent() {
+    let h = harness();
+    h.herdr.set("w1:p1", "s1", "idle");
+    bind(&h, &[("p1", "w1:p1", "s1")]);
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_rev".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "review this".into(), reply_token: "rt1".into(), attachments: vec![], deploy: "none".into(), review: true });
+    tick(&h).await;
+    h.herdr.set("w1:p1", "s1", "working");
+    tick(&h).await;
+    h.herdr.set("w1:p1", "s1", "idle");
+    tick(&h).await;
+    // The review re-sent after a reconnect: same delivery id, new token. Not typed again.
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_rev".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "review this".into(), reply_token: "rt1b".into(), attachments: vec![], deploy: "none".into(), review: true });
+    tick(&h).await;
+    assert_eq!(h.herdr.prompts().len(), 1);
+    assert_eq!(h.relay.record("m1").unwrap().reply_token, "rt1b");
+    // Approved after the review: same message, new delivery, typed again with its own token.
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_go".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "do it".into(), reply_token: "rt2".into(), attachments: vec![], deploy: "none".into(), review: false });
+    tick(&h).await;
+    let ps: Vec<String> = h.herdr.prompts().into_iter().map(|p| p.1).collect();
+    assert_eq!(ps, vec!["review this", "do it"]);
+    assert_eq!(h.relay.record("m1").unwrap().reply_token, "rt2");
+    // A repeat of the real delivery is still typed once.
+    h.relay.on_frame(CloudFrame::Deliver { delivery_id: "d_go2".into(), message_id: "m1".into(), project_id: "p1".into(), envelope: "do it".into(), reply_token: "rt3".into(), attachments: vec![], deploy: "none".into(), review: false });
+    tick(&h).await;
+    assert_eq!(h.herdr.prompts().len(), 2);
 }

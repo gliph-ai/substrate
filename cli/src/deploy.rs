@@ -83,7 +83,7 @@ impl Watcher {
             message_id: job.message_id.clone(), reply_token: job.reply_token.clone(), kind: "deploy".into(), text: String::new(),
             deploy: Some(DeployReport { stage: stage.into(), commit: job.commit.clone(), ci_url: job.ci_url.clone(), env: job.env.clone(),
                 verify_url: job.verify_url.clone(), run_id: job.run_id.clone(), note: note.into() }),
-            attachments: vec![],
+            attachments: vec![], why: String::new(),
         };
         self.api.call("POST", "/relay/report", Some(serde_json::to_value(&r)?)).await?;
         job.stage = stage.into();

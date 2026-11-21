@@ -251,7 +251,7 @@ async fn call(app: &AppInner, account: &str, client: &str, name: &str, a: &Value
             let owner = domain::account_label(app, &p.owner_id).await;
             let t = domain::deploy_targets(app, &p.id, account).await?;
             let mut v = project_json(app, &p, &role, &owner, &t);
-            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','approved','dispatched')")
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','reviewing','approved','dispatched')")
                 .bind(&p.id).fetch_one(&app.db).await?;
             v["messages_waiting"] = json!(waiting);
             Ok(v)

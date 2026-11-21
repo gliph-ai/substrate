@@ -151,7 +151,7 @@ struct LinkRow {
 pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let links = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
-                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
+                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held','reviewing')) AS waiting,
                 COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
          FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
@@ -241,7 +241,7 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
 pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<String>) -> Result<Response, Fail> {
     let l = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
-                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held')) AS waiting,
+                (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held','reviewing')) AS waiting,
                 COALESCE(bool_or(m.can_deploy_test), false) AS deploy_test, COALESCE(bool_or(m.can_deploy_prod), false) AS deploy_prod,
                 COALESCE(array_agg(p.name ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL), '{}') AS projects
          FROM access_links l LEFT JOIN members m ON m.account_id=l.account_id LEFT JOIN projects p ON p.id=m.project_id
@@ -249,7 +249,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
     ).bind(&lid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such link"))?;
     let (acct, revoked): (String, bool) = sqlx::query_as("SELECT account_id, revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&app.db).await?;
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
-    let waiting = sqlx::query_as::<_, crate::domain::Message>("SELECT * FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held') ORDER BY order_n")
+    let waiting = sqlx::query_as::<_, crate::domain::Message>("SELECT * FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held','reviewing') ORDER BY order_n")
         .bind(&acct).fetch_all(&app.db).await?;
     let convs: Vec<(String, String, String)> = sqlx::query_as("SELECT id, project_id, title FROM conversations WHERE sender_id=$1 ORDER BY updated_at DESC LIMIT 20")
         .bind(&acct).fetch_all(&app.db).await?;

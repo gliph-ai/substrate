@@ -260,6 +260,13 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             for m in unacked {
                 sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE id=$1").bind(&m.id).execute(&app.db).await?;
             }
+            let reviews = sqlx::query_as::<_, Message>(
+                "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.machine_id=$1 AND m.stage='reviewing'",
+            ).bind(machine).fetch_all(&app.db).await?;
+            for m in reviews {
+                let p = domain::project(app, &m.project_id).await?;
+                domain::send_review(app, &m, &p).await?;
+            }
             for pid in project_ids(app, machine).await? {
                 domain::pump(app, &pid).await?;
             }
@@ -437,6 +444,10 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
         sqlx::query_scalar("SELECT id FROM attachments WHERE id = ANY($1) AND message_id=$2 AND origin='agent'")
             .bind(&r.attachments).bind(&m.id).fetch_all(&app.db).await?
     };
+    // In a review the agent only proposes: the tester hears nothing until the developer approves.
+    if m.stage == "reviewing" && r.kind != "propose" {
+        return Err(Fail::new(409, format!("{} is under review; send the agreed request with: substrate propose {} --text \"…\" --why \"…\"", m.id, m.id)));
+    }
     match r.kind.as_str() {
         "progress" | "reply" => {
             add_event(&app, &m.conversation_id, &m.id, "agent", &agent_name, &r.kind, &text, json!({"message_id": m.id, "attachments": atts, "secret_hits": hits}), held).await?;
@@ -457,6 +468,35 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             let who = domain::account_label(&app, &p.owner_id).await;
             add_event(&app, &m.conversation_id, &m.id, "developer", &who, "note", &text, json!({"message_id": m.id, "by": who, "via": agent_name, "secret_hits": hits}), held).await?;
         }
+        "propose" => {
+            // The request as the developer and the agent agreed it in a review. It
+            // waits for the developer's approval; the tester hears it only then. The
+            // review's token dies here: the real delivery brings a new one.
+            if m.stage != "reviewing" {
+                return Err(Fail::new(409, "this message is not under review"));
+            }
+            let text = proto::sanitize(&r.text, 8000);
+            if text.is_empty() {
+                return Err(Fail::new(400, "the proposed request is empty"));
+            }
+            if proto::forges_envelope(&text) {
+                return Err(Fail::new(400, "the proposal contains text that imitates Substrate's own framing; rephrase it"));
+            }
+            let why = proto::sanitize(&r.why, 1000);
+            let back = if m.risk.is_empty() { "pending_approval" } else { "held" };
+            let n = sqlx::query("UPDATE messages SET stage=$2, proposal=$3, proposal_why=$4, delivery_id='', reply_hash='', updated_at=now() WHERE id=$1 AND stage='reviewing'")
+                .bind(&m.id).bind(back).bind(&text).bind(&why).execute(&app.db).await?.rows_affected();
+            if n == 0 {
+                return Err(Fail::new(409, "this message is not under review"));
+            }
+            // A "Review again" still queued on the relay is not typed after the review closed.
+            app.send_machine(&p.machine_id, CloudFrame::Cancel { delivery_id: m.delivery_id.clone() });
+            add_event(&app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "The developer finished going over your request. It waits for their approval.",
+                json!({"message_id": m.id, "stage": back}), false).await?;
+            crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), m.id.clone(), p.name.clone(), m.sender_label.clone(), text.clone(), back == "held");
+            app.changed(&account);
+            domain::pump(&app, &p.id).await?;
+        }
         "deploy" => {
             let d = r.deploy.ok_or_else(|| Fail::new(400, "deploy report without deploy details"))?;
             if !proto::DEPLOY_STAGES.contains(&d.stage.as_str()) {
@@ -472,7 +512,7 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             let line = deploy_line(&clean);
             add_event(&app, &m.conversation_id, &m.id, "deploy", "CI and deploy", "deploy", &line, json!({"message_id": m.id, "deploy": clean}), false).await?;
         }
-        _ => return Err(Fail::new(400, "kind must be progress, ask, reply, final, note or deploy")),
+        _ => return Err(Fail::new(400, "kind must be progress, ask, reply, final, note, propose or deploy")),
     }
     if held {
         audit(&app, &account, &p.id, &agent_name, "reply.held", &m.id, &hits.join(",")).await;
@@ -605,7 +645,7 @@ pub async fn api_projects(State(app): State<App>, headers: HeaderMap) -> Result<
     let ps = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY handle").bind(&account).fetch_all(&app.db).await?;
     let mut out = vec![];
     for p in ps {
-        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held')").bind(&p.id).fetch_one(&app.db).await?;
+        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage IN ('pending_approval','held','reviewing')").bind(&p.id).fetch_one(&app.db).await?;
         out.push(json!({"id": p.id, "handle": p.handle, "name": p.name, "machine_id": p.machine_id, "pane_id": p.pane_id, "cwd": p.cwd, "has_icon": !p.icon_etag.is_empty(),
             "agent": p.agent, "state": p.state, "mode": if p.auto_active() { "auto" } else { "approve" }, "auto_until": p.auto_until, "pending": pending,
             "gliph_channel": p.gliph_channel}));
@@ -726,7 +766,7 @@ pub async fn api_icon(State(app): State<App>, headers: HeaderMap, Path(handle): 
 pub async fn api_approvals(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Fail> {
     let (account, _) = machine_auth(&app, &headers).await?;
     let ms = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held') ORDER BY m.order_n",
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held','reviewing') ORDER BY m.order_n",
     ).bind(&account).fetch_all(&app.db).await?;
     Ok(Json(json!({"approvals": ms.iter().map(msg_row).collect::<Vec<_>>()})))
 }
@@ -746,7 +786,7 @@ fn msg_row(m: &Message) -> Value {
 
 pub async fn api_decide(State(app): State<App>, headers: HeaderMap, Path((mid, action)): Path<(String, String)>) -> Result<Json<Value>, Fail> {
     let (account, _) = machine_auth(&app, &headers).await?;
-    let m = domain::decide(&app, &account, &mid, &action, None).await?;
+    let m = domain::decide(&app, &account, &mid, &action, None, None).await?;
     Ok(Json(json!({"id": m.id, "stage": m.stage})))
 }
 

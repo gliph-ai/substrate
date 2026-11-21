@@ -53,6 +53,9 @@ pub struct Record {
     /// `substrate guard` enforces it. Empty, from an older server, means none.
     #[serde(default)]
     pub deploy: String,
+    /// A review-only delivery: the real one of the same message may follow.
+    #[serde(default)]
+    pub review: bool,
     /// The agent's session when it was handed this: the guard matches hooks to it.
     #[serde(default)]
     pub agent_session: String,
@@ -191,11 +194,15 @@ impl Relay {
                 inner.bindings = projects.into_iter().map(|b| (b.project_id.clone(), b)).collect();
                 inner.state_sent.clear();
             }
-            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments, deploy } => {
-                if let Some(mut existing) = self.record(&message_id) {
+            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments, deploy, review } => {
+                // A review goes before the real delivery of the same message, and a
+                // review may be asked again: either one is new text for the agent.
+                let fresh = |e: &Record| (e.review || review) && e.delivery_id != delivery_id;
+                if let Some(mut existing) = self.record(&message_id).filter(|e| !fresh(e)) {
                     // A repeat (the cloud re-sent after a reconnect). Never a
                     // second submission: adopt the new delivery id, re-ack.
-                    if existing.delivery_id != delivery_id {
+                    // A review re-sent after a reconnect keeps its delivery id with a new token.
+                    if existing.delivery_id != delivery_id || existing.reply_token != reply_token {
                         existing.delivery_id = delivery_id;
                         existing.reply_token = reply_token;
                         self.save(&existing);
@@ -216,10 +223,14 @@ impl Relay {
                     message_id: message_id.clone(), delivery_id, project_id: project_id.clone(), envelope, reply_token, attachments,
                     state: "received".into(), pane_id: b.as_ref().map(|b| b.pane_id.clone()).unwrap_or_default(),
                     cwd: b.as_ref().map(|b| b.cwd.clone()).unwrap_or_default(), received_at: now_s(), submitted_at: 0, saw_working: false, reported_uncertain: false,
-                    agent_session: b.as_ref().map(|b| b.agent_session.clone()).unwrap_or_default(), deploy,
+                    agent_session: b.as_ref().map(|b| b.agent_session.clone()).unwrap_or_default(), deploy, review,
                 };
                 self.save(&r);
-                self.inner.lock().unwrap().queue.entry(project_id).or_default().push_back(message_id.clone());
+                let mut inner = self.inner.lock().unwrap();
+                let q = inner.queue.entry(project_id).or_default();
+                q.retain(|m| m != &message_id);
+                q.push_back(message_id.clone());
+                drop(inner);
                 self.ack(&r, AckStage::Accepted, "");
                 log(&self.paths, "info", "message received", json!({"message_id": message_id}));
             }

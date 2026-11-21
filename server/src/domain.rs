@@ -65,6 +65,9 @@ pub struct Message {
     pub updated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub deploy_allow: String,
+    /// The request as the developer and their agent rewrote it in a review (`substrate propose`).
+    pub proposal: String,
+    pub proposal_why: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -363,14 +366,88 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     message(app, &mid).await
 }
 
+/// The relay that understands a review delivery (a second delivery of the same message).
+const REVIEW_RELAY: (u32, u32, u32) = (0, 1, 15);
+
+fn version(v: &str) -> (u32, u32, u32) {
+    let mut it = v.trim_start_matches('v').split(['.', '-']).map(|x| x.parse().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// "Review with the agent first": the tester's request goes to the developer's agent
+/// marked review-only, so the developer can go over it with the agent in its session.
+/// The agent sends the agreed version back with `substrate propose`; it waits for
+/// approval again. The tester hears that a review is on, not what is said in it.
+pub async fn review(app: &AppInner, owner: &str, mid: &str) -> Result<Message, Fail> {
+    let m = message(app, mid).await?;
+    let p = require_owner(app, &m.project_id, owner).await?;
+    let from = ["pending_approval", "held", "reviewing"];
+    if !from.contains(&m.stage.as_str()) {
+        return Err(Fail::new(409, format!("the message is {} and cannot be reviewed now", m.stage.replace('_', " "))));
+    }
+    if p.machine_id.is_empty() || p.pane_id.is_empty() || !app.machine_online(&p.machine_id) || matches!(p.state.as_str(), "needs_rebind" | "offline" | "unbound") {
+        return Err(Fail::new(409, "the project's agent is offline; start it to review the request with it"));
+    }
+    let v: String = sqlx::query_scalar("SELECT version FROM machines WHERE id=$1").bind(&p.machine_id).fetch_one(&app.db).await?;
+    if version(&v) < REVIEW_RELAY {
+        return Err(Fail::new(409, "update the relay on your computer first: curl -fsSL https://substrate.gliph.sh/install | sh"));
+    }
+    proto::review_envelope(&m.envelope, &m.id).ok_or_else(|| Fail::new(409, "this message's prompt cannot be reviewed"))?;
+    let who = account_label(app, owner).await;
+    // A new review starts clean: an older proposal is not what this one agrees.
+    let delivery = id("d");
+    let done = sqlx::query("UPDATE messages SET stage='reviewing', delivery_id=$2, proposal='', proposal_why='', agent_idle=false, updated_at=now() WHERE id=$1 AND stage = ANY($3)")
+        .bind(mid).bind(&delivery).bind(&from[..]).execute(&app.db).await?;
+    if done.rows_affected() == 0 {
+        return Err(Fail::new(409, "the message changed meanwhile; reload and decide again"));
+    }
+    if !send_review(app, &message(app, mid).await?, &p).await? {
+        // Back exactly as it was (an earlier review still running, its proposal), unless
+        // something else moved it meanwhile.
+        sqlx::query("UPDATE messages SET stage=$2, delivery_id=$3, proposal=$4, proposal_why=$5 WHERE id=$1 AND delivery_id=$6 AND stage='reviewing'")
+            .bind(mid).bind(&m.stage).bind(&m.delivery_id).bind(&m.proposal).bind(&m.proposal_why).bind(&delivery).execute(&app.db).await?;
+        return Err(Fail::new(409, "the project's agent went offline; try again when it is back"));
+    }
+    if m.stage != "reviewing" {
+        add_event(app, &m.conversation_id, mid, "system", "Substrate", "stage", "The developer is going over your request with their agent before approving it.",
+            json!({"message_id": mid, "stage": "reviewing", "by": who}), false).await?;
+    }
+    audit(app, owner, &p.id, &who, "message.review", mid, &m.stage).await;
+    message(app, mid).await
+}
+
+/// Send a review to the relay under the message's delivery id, with a fresh reply
+/// token. Again on every reconnect while it is under review: the relay types a
+/// delivery id once and only adopts the new token, so a lost frame is never lost.
+pub async fn send_review(app: &AppInner, m: &Message, p: &Project) -> Result<bool, Fail> {
+    let Some(env) = proto::review_envelope(&m.envelope, &m.id) else { return Ok(false) };
+    let reply_token = token();
+    let h = hash(&reply_token);
+    // Review only: no attachments are downloaded and nothing may be deployed.
+    let sent = app.send_machine(&p.machine_id, CloudFrame::Deliver {
+        delivery_id: m.delivery_id.clone(), message_id: m.id.clone(), project_id: p.id.clone(), envelope: env, reply_token,
+        attachments: vec![], deploy: "none".into(), review: true,
+    });
+    // The new token counts only once it went out: a failed send leaves a running review's token valid.
+    if sent {
+        sqlx::query("UPDATE messages SET reply_hash=$2 WHERE id=$1 AND delivery_id=$3 AND stage='reviewing'").bind(&m.id).bind(h).bind(&m.delivery_id).execute(&app.db).await?;
+    }
+    Ok(sent)
+}
+
 /// Owner decisions on a message. `edit` is the developer's rewrite of the
 /// tester's text, taken only with "approve"; the agent gets it in place of the original.
-pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: Option<&str>) -> Result<Message, Fail> {
+/// `why` is the developer's line to the tester on what changed.
+pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: Option<&str>, why: Option<&str>) -> Result<Message, Fail> {
+    if action == "review" {
+        return review(app, owner, mid).await;
+    }
     let m = message(app, mid).await?;
     let p = require_owner(app, &m.project_id, owner).await?;
     let who = account_label(app, owner).await;
     let (from, to, text): (&[&str], &str, String) = match action {
         "approve" => (&["pending_approval", "held"], "approved", "Approved by the developer.".into()),
+        "reject" if m.stage == "reviewing" => (&["reviewing"], "rejected", "The developer declined this message after going over it. The agent will not work on it.".into()),
         "reject" => (&["pending_approval", "held", "approved"], "rejected", "The developer declined this message. The agent did not get it.".into()),
         "cancel" => (&["approved", "dispatched", "accepted"], "cancelled", "Cancelled by the developer before the agent received it.".into()),
         "retry" => (&["uncertain", "failed", "interrupted", "expired"], "approved", "The developer sent it again.".into()),
@@ -379,6 +456,12 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: 
     if !from.contains(&m.stage.as_str()) {
         return Err(Fail::new(409, format!("the message is {} and cannot be {}d now", m.stage.replace('_', " "), action)));
     }
+    // An approval without its own text approves what the review agreed, never the original.
+    let (edit, why) = if edit.is_none() && action == "approve" && !m.proposal.is_empty() {
+        (Some(m.proposal.as_str()), Some(m.proposal_why.as_str()))
+    } else {
+        (edit, why)
+    };
     let edit = match edit.filter(|_| action == "approve").map(|t| proto::sanitize(t, 8000)) {
         Some(t) if t.trim().is_empty() => return Err(Fail::new(400, "the edited message is empty")),
         Some(t) if t.trim() != m.text.trim() => Some(t.trim().to_string()),
@@ -392,7 +475,8 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: 
         }
         None => None,
     };
-    if action == "cancel" && !m.delivery_id.is_empty() {
+    // A cancel, or a review closed by a reject: the relay drops it if not typed yet.
+    if (action == "cancel" || m.stage == "reviewing") && !m.delivery_id.is_empty() {
         app.send_machine(&p.machine_id, CloudFrame::Cancel { delivery_id: m.delivery_id.clone() });
     }
     let expires = if action == "retry" { now() + Duration::days(MESSAGE_TTL_DAYS) } else { m.expires_at };
@@ -411,13 +495,22 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: 
     if let Some((t, _)) = &edit {
         // The developer speaks in the thread: the tester's assistant sees who changed
         // their words and what the agent got instead.
-        add_event(app, &m.conversation_id, mid, "developer", &who, "edit", &format!("I edited your message before sending it to the agent. The agent got:\n{t}"),
-            json!({"message_id": mid, "by": who}), false).await?;
+        let why = why.map(|w| proto::sanitize(w, 1000)).filter(|w| !w.is_empty());
+        let said = match &why {
+            Some(w) => format!("I adjusted your request before sending it to the agent. {w}\nThe agent got:\n{t}"),
+            None => format!("I edited your message before sending it to the agent. The agent got:\n{t}"),
+        };
+        add_event(app, &m.conversation_id, mid, "developer", &who, "edit", &said, json!({"message_id": mid, "by": who, "why": why}), false).await?;
         audit(app, owner, &p.id, &who, "message.edit", mid, "").await;
+    } else if let Some(w) = why.filter(|_| action == "approve").map(|w| proto::sanitize(w, 1000)).filter(|w| !w.is_empty()) {
+        // Reviewed and kept as written: the tester still hears what the review found.
+        add_event(app, &m.conversation_id, mid, "developer", &who, "edit", &format!("I went over your request before sending it to the agent. {w}"),
+            json!({"message_id": mid, "by": who, "why": w}), false).await?;
     }
     add_event(app, &m.conversation_id, mid, "system", "Substrate", "stage", &text, json!({"message_id": mid, "stage": to, "by": who}), false).await?;
     audit(app, owner, &p.id, &who, &format!("message.{action}"), mid, &m.stage).await;
-    if to == "approved" {
+    // Approved, or a review that held the queue is over.
+    if to == "approved" || m.stage == "reviewing" {
         pump(app, &p.id).await?;
     }
     message(app, mid).await
@@ -433,7 +526,8 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     if matches!(p.state.as_str(), "needs_rebind" | "offline" | "unbound") {
         return Ok(());
     }
-    let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND stage = ANY($2) AND NOT agent_idle")
+    // A review in progress holds the agent too: the developer is talking to it.
+    let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND ((stage = ANY($2) AND NOT agent_idle) OR stage='reviewing')")
         .bind(pid).bind(IN_FLIGHT).fetch_one(&app.db).await?;
     if busy > 0 {
         return Ok(());
@@ -469,7 +563,7 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     }).collect();
     let sent = app.send_machine(&p.machine_id, CloudFrame::Deliver {
         delivery_id: delivery.clone(), message_id: m.id.clone(), project_id: pid.to_string(),
-        envelope: m.envelope.clone(), reply_token, attachments, deploy: m.deploy_allow.clone(),
+        envelope: m.envelope.clone(), reply_token, attachments, deploy: m.deploy_allow.clone(), review: false,
     });
     if !sent {
         // The socket closed between the check and the send: back to the queue.
@@ -560,6 +654,7 @@ pub fn summarize(m: &Message, online: bool, p: &Project, held_reply: bool) -> (S
     match m.stage.as_str() {
         "pending_approval" => ("Delivered to Substrate. Waiting for the developer to approve it.".into(), "check_later", Some(300), false),
         "held" => ("Delivered to Substrate. The developer reviews it first.".into(), "check_later", Some(600), false),
+        "reviewing" => ("The developer is going over your request with their agent before approving it.".into(), "check_later", Some(600), false),
         "approved" if !online || p.machine_id.is_empty() => ("Approved. The developer's agent is offline. It gets the message when it reconnects.".into(), "check_later", Some(600), false),
         "approved" if p.state == "needs_rebind" => ("Approved. The developer must reconnect the project to its agent first.".into(), "check_later", Some(600), false),
         "approved" => ("Approved and queued for the developer's agent.".into(), "wait", Some(60), false),
@@ -568,7 +663,7 @@ pub fn summarize(m: &Message, online: bool, p: &Project, held_reply: bool) -> (S
         "submitted" | "working" => ("The developer's agent is working on it.".into(), "wait", Some(60), false),
         "awaiting_sender" => ("The developer's agent has a question for you.".into(), "answer_question", None, false),
         "answered" => ("You answered the agent's question. Your answer is a new message in this conversation.".into(), "nothing", None, true),
-        "rejected" => ("The developer declined this message. The agent did not get it.".into(), "nothing", None, true),
+        "rejected" => ("The developer declined this message. The agent will not work on it.".into(), "nothing", None, true),
         "expired" => ("It expired before the developer's agent received it.".into(), "contact_developer", None, true),
         "cancelled" => ("It was cancelled before the developer's agent received it.".into(), "nothing", None, true),
         "uncertain" => ("Delivery is unconfirmed. The developer's computer restarted during delivery.".into(), "contact_developer", None, false),
@@ -607,10 +702,17 @@ pub async fn machine_presence(app: &AppInner, machine: &str, online: bool) -> Re
 /// Every minute: expire what waited too long.
 pub async fn housekeeping(app: &AppInner) -> Result<(), Fail> {
     let expired = sqlx::query_as::<_, Message>(
-        "UPDATE messages SET stage='expired', updated_at=now() WHERE stage IN ('pending_approval','held','approved') AND expires_at < now() RETURNING *",
+        "UPDATE messages SET stage='expired', updated_at=now() WHERE stage IN ('pending_approval','held','reviewing','approved') AND expires_at < now() RETURNING *",
     ).fetch_all(&app.db).await?;
     for m in expired {
         add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "Expired before it could be delivered.", json!({"message_id": m.id, "stage": "expired"}), false).await?;
+        // Of these stages only a review carries a delivery id: the relay drops it if
+        // not typed yet, and the queue it held moves on.
+        if !m.delivery_id.is_empty() {
+            let p = project(app, &m.project_id).await?;
+            app.send_machine(&p.machine_id, CloudFrame::Cancel { delivery_id: m.delivery_id.clone() });
+            pump(app, &m.project_id).await?;
+        }
     }
     // Projects are 1-1 with Herdr panes: one with no pane goes now, one whose
     // agent left goes after 10 minutes (a restart in its folder keeps it), queue and all.

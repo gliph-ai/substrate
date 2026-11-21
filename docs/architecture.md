@@ -38,6 +38,7 @@ tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
 failed | interrupted | uncertain | held`.
 
 - `held`: a risk flag matched. The message needs manual approval, also in auto relay.
+- `reviewing`: the developer sent the request to the agent review-only (`[SUBSTRATE REVIEW id]`, no deploy, no attachments) to go over it together. It holds the agent's queue. The agent's `substrate propose` stores `proposal` and `proposal_why` and puts it back to `pending_approval` (or `held`); every other report is refused. Approving the proposal delivers it as a normal message; the tester gets the developer's `edit` event with why. The relay types a review and the later real delivery of the same message both (0.1.15).
 - `uncertain`: the daemon stopped after it wrote the dispatch record and before Herdr confirmed the submit. Substrate does not retry it. The developer decides.
 - `completed`: the agent posted `substrate reply --final`. When an agent goes idle without a final reply, the message stays at `working` with `agent_idle=true`. The summary states this fact and adds nothing else.
 

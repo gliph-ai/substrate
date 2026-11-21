@@ -69,6 +69,8 @@ enum Cmd {
     Progress { id: String, #[arg(long)] text: String },
     /// (For agents) Tell the tester, as the developer, what the developer changed or asked for in this session.
     Note { id: String, #[arg(long)] text: String },
+    /// (For agents, in a review) Send the request as you and the developer agreed it, and why it changed.
+    Propose { id: String, #[arg(long)] text: String, #[arg(long, default_value = "")] why: String },
     /// (For agents) Ask the tester a question.
     Ask { id: String, #[arg(long)] text: String },
     /// (For agents) Reply to a message. Add --final when the work is done.
@@ -382,6 +384,11 @@ async fn run() -> Result<()> {
             report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "note".into(), text: read_text(&text)?, ..Default::default() }).await?;
             println!("Note sent to the tester as the developer.");
         }
+        Cmd::Propose { id, text, why } => {
+            let r = record(&paths, &id)?;
+            report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "propose".into(), text: read_text(&text)?, why: read_text(&why)?, ..Default::default() }).await?;
+            println!("Sent. It waits for the developer's approval; you get it as a normal Substrate message then.");
+        }
         Cmd::Ask { id, text } => {
             let r = record(&paths, &id)?;
             report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "ask".into(), text: read_text(&text)?, ..Default::default() }).await?;
@@ -393,7 +400,7 @@ async fn run() -> Result<()> {
             for a in attach {
                 ids.push(upload_inside(&api, &r, &a).await?);
             }
-            let v = report(&api, Report { message_id: id.clone(), reply_token: r.reply_token.clone(), kind: if final_ { "final".into() } else { "reply".into() },
+            let v = report(&api, Report { message_id: id.clone(), reply_token: r.reply_token.clone(), why: String::new(), kind: if final_ { "final".into() } else { "reply".into() },
                 text: read_text(&text)?, deploy: None, attachments: ids }).await?;
             if final_ {
                 let _ = std::fs::write(paths.dispatch().join(format!("{}.final", substrate_proto::safe_filename(&id))), b"");
@@ -417,7 +424,7 @@ async fn run() -> Result<()> {
                     bail!("stage is one of: {}", DEPLOY_STAGES.join(", "));
                 }
                 let r = record(&paths, &id)?;
-                report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "deploy".into(), text: String::new(), attachments: vec![],
+                report(&api, Report { message_id: id, reply_token: r.reply_token, why: String::new(), kind: "deploy".into(), text: String::new(), attachments: vec![],
                     deploy: Some(DeployReport { stage, verify_url: url.unwrap_or_default(), note: note.unwrap_or_default(), ..Default::default() }) }).await?;
                 println!("Deploy stage sent.");
             }

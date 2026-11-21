@@ -120,6 +120,7 @@ fn message_json(app: &AppInner, m: &Message, projects: &[Project], with_prompt: 
         "id": m.id, "conversation_id": m.conversation_id, "kind": m.kind, "text": m.text, "stage": m.stage,
         "deploy_stage": if m.deploy_stage.is_empty() { Value::Null } else { json!(m.deploy_stage) },
         "deploy_allow": m.deploy_allow, "risk": m.risk, "client": m.client_name,
+        "proposal": if m.proposal.is_empty() { Value::Null } else { json!({"text": m.proposal, "why": m.proposal_why}) },
         "sender": {"id": m.sender_id, "name": m.sender_label, "avatar_url": format!("{}/accounts/{}/avatar", app.cfg.public_url, m.sender_id)},
         "project": p.map(|p| project_json(app, p)),
         "created_at": m.created_at, "updated_at": m.updated_at,
@@ -139,7 +140,7 @@ pub async fn dashboard(State(app): State<App>, headers: HeaderMap) -> Result<Jso
     let aid = bearer(&app, &headers).await?;
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&aid).fetch_all(&app.db).await?;
     let q = |w: &str, lim: i64| format!("SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND ({w}) ORDER BY m.updated_at DESC LIMIT {lim}");
-    let waiting = sqlx::query_as::<_, Message>(&q("m.stage IN ('pending_approval','held')", 100)).bind(&aid).fetch_all(&app.db).await?;
+    let waiting = sqlx::query_as::<_, Message>(&q("m.stage IN ('pending_approval','held','reviewing')", 100)).bind(&aid).fetch_all(&app.db).await?;
     let active = sqlx::query_as::<_, Message>(&q(ACTIVE, 30)).bind(&aid).fetch_all(&app.db).await?;
     let history = sqlx::query_as::<_, Message>(&q(&format!("m.stage IN ('completed','rejected','cancelled','expired','failed','interrupted','uncertain','answered') AND NOT ({ACTIVE})"), 25))
         .bind(&aid).fetch_all(&app.db).await?;
@@ -154,15 +155,16 @@ pub async fn dashboard(State(app): State<App>, headers: HeaderMap) -> Result<Jso
     })))
 }
 
-/// POST /api/v1/messages/{id}/{approve|reject}. An approve may carry
-/// `{"text": "..."}`: the developer's edit, which the agent gets instead.
+/// POST /api/v1/messages/{id}/{approve|reject|review}. An approve may carry
+/// `{"text": "...", "why": "..."}`: the developer's edit, which the agent gets instead,
+/// and the line the tester gets on why. Review sends the request to the agent to go over first.
 pub async fn decide(State(app): State<App>, headers: HeaderMap, Path((mid, action)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<Value>, Fail> {
     let aid = bearer(&app, &headers).await?;
-    if !matches!(action.as_str(), "approve" | "reject") {
-        return Err(Fail::new(404, "approve or reject"));
+    if !matches!(action.as_str(), "approve" | "reject" | "review") {
+        return Err(Fail::new(404, "approve, reject or review"));
     }
     let b: Value = if body.is_empty() { Value::Null } else { serde_json::from_slice(&body).map_err(|_| Fail::new(400, "the body is not JSON"))? };
-    let m = domain::decide(&app, &aid, &mid, &action, b["text"].as_str()).await?;
+    let m = domain::decide(&app, &aid, &mid, &action, b["text"].as_str(), b["why"].as_str()).await?;
     Ok(Json(json!({"id": m.id, "stage": m.stage})))
 }
 
@@ -210,7 +212,7 @@ struct SessionRow {
 
 async fn session_json(app: &AppInner, s: &SessionRow, projects: &[Project]) -> Result<Value, Fail> {
     let rows: Vec<(String, bool, bool)> = sqlx::query_as("SELECT project_id, can_deploy_test, can_deploy_prod FROM members WHERE account_id=$1").bind(&s.account_id).fetch_all(&app.db).await?;
-    let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held')").bind(&s.account_id).fetch_one(&app.db).await?;
+    let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held','reviewing')").bind(&s.account_id).fetch_one(&app.db).await?;
     Ok(json!({
         "id": s.id, "name": s.label, "avatar_url": format!("{}/accounts/{}/avatar", app.cfg.public_url, s.account_id),
         "projects": rows.iter().filter_map(|r| projects.iter().find(|p| p.id == r.0)).map(|p| project_json(app, p)).collect::<Vec<_>>(),
