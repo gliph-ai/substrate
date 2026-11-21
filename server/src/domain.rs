@@ -185,7 +185,7 @@ async fn mirror(app: &AppInner, conv: &str, actor_kind: &str, actor_name: &str, 
     let mid = data.get("message_id").and_then(|v| v.as_str()).unwrap_or("");
     let short = |s: &str| -> String { let s = s.replace('\n', " "); if s.chars().count() > 400 { format!("{}…", s.chars().take(400).collect::<String>()) } else { s } };
     let body = match actor_kind {
-        "human" => format!("[{handle}] {actor_name}: {} · {mid}", short(text)),
+        "human" => format!("[{handle}] {actor_name}: {} ({mid})", short(text)),
         "agent" => format!("[{handle}] {actor_name} ({kind}): {}", short(text)),
         "deploy" => format!("[{handle}] deploy: {}", short(text)),
         _ => format!("[{handle}] {}", short(text)),

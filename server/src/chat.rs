@@ -21,7 +21,7 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 meta name="referrer" content="no-referrer";
-                title { "Chat · Substrate" }
+                title { "Chat | Substrate" }
                 link rel="icon" href="/static/favicon.svg" type="image/svg+xml";
                 link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
                 link rel="stylesheet" href=(format!("/static/app.css?v={}", crate::asset_v()));

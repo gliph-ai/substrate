@@ -71,6 +71,8 @@ pub async fn register(State(app): State<App>, headers: HeaderMap, Json(r): Json<
         return Ok((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_redirect_uri"}))).into_response());
     }
     let name = substrate_proto::sanitize(&r.client_name, 64);
+    // "session: " marks a message sent through an access link; a client cannot claim it.
+    let name = if name.to_ascii_lowercase().starts_with("session:") { name["session:".len()..].trim().to_string() } else { name };
     let name = if name.is_empty() { "MCP client".to_string() } else { name };
     let cid = id("cl");
     sqlx::query("INSERT INTO clients (id, name, redirect_uris) VALUES ($1,$2,$3)").bind(&cid).bind(&name).bind(json!(r.redirect_uris)).execute(&app.db).await?;

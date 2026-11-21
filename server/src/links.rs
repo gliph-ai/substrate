@@ -187,7 +187,7 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
                             span.r.row {
                                 span.faint style="font-size:13px" {
                                     @match l.last_used_at { Some(t) => { "used " (crate::web::ago_text(&t)) }, None => { "not used yet" } }
-                                    " · expires " (l.expires_at.format("%b %d"))
+                                    ", expires " (l.expires_at.format("%b %d"))
                                 }
                                 span.chev { (ic("arrow-right")) }
                             }
@@ -291,7 +291,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
                     @if l.deploy_prod { span.tag.warn { "deploys to production" } }
                     @if l.auto { span.tag.warn { "no approval" } }
                 }
-                span.faint style="font-size:13px" { @match l.last_used_at { Some(t) => { "Used " (crate::web::ago_text(&t)) }, None => { "Not used yet" } } " · expires " (l.expires_at.format("%b %d")) }
+                span.faint style="font-size:13px" { @match l.last_used_at { Some(t) => { "Used " (crate::web::ago_text(&t)) }, None => { "Not used yet" } } ", expires " (l.expires_at.format("%b %d")) }
             }
             div.grid.tight {
                 div.card.stat { span.k { (ic("message")) "Messages" } span.big { (sent) } }
@@ -330,9 +330,9 @@ fn created(app: &AppInner, a: &crate::auth::Account, label: &str, secret: &str) 
                 div.secret { (u) }
                 div.row { button.btn.primary type="button" data-copy=(u) { (ic("copy")) "Copy link" } span.faint style="font-size:13px" { "You see it only once." } }
                 div.stack style="gap:8px;font-size:14px" {
-                    div.row.muted { (ic("link")) span { strong style="color:var(--text)" { "Browser" } " · Open the link for a chat with your agents." } }
-                    div.row.muted { img.logo src="/static/logos/claude.svg" alt="Claude" width="18" height="18"; span { strong style="color:var(--text)" { "Claude" } " · Settings › Connectors › Add custom connector. Paste the link, leave authentication off." } }
-                    div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } " · Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
+                    div.row.muted { (ic("link")) span { strong style="color:var(--text)" { "Browser" } ": Open the link for a chat with your agents." } }
+                    div.row.muted { img.logo src="/static/logos/claude.svg" alt="Claude" width="18" height="18"; span { strong style="color:var(--text)" { "Claude" } ": Settings › Connectors › Add custom connector. Paste the link, leave authentication off." } }
+                    div.row.muted { img.logo src="/static/logos/openai.svg" alt="ChatGPT" width="18" height="18"; span { strong style="color:var(--text)" { "ChatGPT" } ": Settings › Apps › Advanced settings › Developer mode. Create an app with the link and no authentication." } }
                 }
             }
             div.row { a.btn href="/sessions" { (ic("arrow-left")) "All sessions" } }

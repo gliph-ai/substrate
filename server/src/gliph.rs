@@ -128,7 +128,7 @@ async fn invoke(app: &App, d: &Value) -> Result<String, String> {
     let a1 = words.next().map(str::to_string);
     let rest = words.next().unwrap_or("").to_string();
     if sub.is_empty() || sub == "help" {
-        return Ok("Substrate: /invite substrate adds it to a channel. Then /substrate link <project> · unlink · status [project] · approve <message> · reject <message> · send <project> <text> · mode <project> approve|auto [1h|8h]. In a linked channel, type '@<project> <text>' to message its agent.".into());
+        return Ok("Substrate: /invite substrate adds it to a channel. Then /substrate link <project>, unlink, status [project], approve <message>, reject <message>, send <project> <text>, mode <project> approve|auto [1h|8h]. In a linked channel, type '@<project> <text>' to message its agent.".into());
     }
     let account = account_for_nick(app, actor).await.ok_or_else(|| sign_in_hint(app))?;
     let fail = |e: crate::app::Fail| e.1;

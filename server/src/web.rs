@@ -36,6 +36,16 @@ pub fn agent_logo(kind: &str) -> Option<&'static str> {
 }
 
 /// The logo of the assistant a tester used, from its OAuth client name.
+/// How a sender reached Substrate, in words. A session link is named after its
+/// tester, so "session: Umar" under Umar says only "Session link".
+pub fn client_text(client: &str, sender: &str) -> String {
+    match client.strip_prefix("session: ") {
+        Some(l) if l.trim().eq_ignore_ascii_case(sender.trim()) => "Session link".into(),
+        Some(l) => format!("Session link {l}"),
+        None => client.to_string(),
+    }
+}
+
 pub fn client_logo(client: &str) -> Option<&'static str> {
     let c = client.to_ascii_lowercase();
     if c.contains("claude") || c.contains("anthropic") {
@@ -292,7 +302,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { (title) " · Substrate" }
+                title { (title) " | Substrate" }
                 meta name="description" content="Give people a direct line to the agents building your software.";
                 link rel="icon" href="/static/favicon.svg" type="image/svg+xml";
                 link rel="apple-touch-icon" href="/static/logos/substrate.png";
@@ -434,7 +444,7 @@ fn landing() -> Html<String> {
                 div.row { a.btn href="/sessions/new" { (ic("link")) "Create a session" } }
             }
             div.card {
-                h3 { "Install the relay " span.muted style="font-weight:400" { "· macOS" } }
+                h3.row { "Install the relay" span.tag { "macOS" } }
                 (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate daemon install"]))
             }
         }
@@ -579,7 +589,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                             div.gone-row {
                                 a.item href=(format!("/projects/{}", p.id)) {
                                     span.l { (picon(&p.id, &p.name, &p.icon_etag, 24)) strong style="font-weight:500" { (p.name) } (status_tag(&p.state)) }
-                                    span.r { @if *q > 0 { (q) " queued · " } "Move it" }
+                                    span.r { @if *q > 0 { span.tag.warn { (q) " queued" } } "Move it" }
                                 }
                                 form.inline method="post" action=(format!("/projects/{}/delete", p.id))
                                     data-confirm=(format!("Delete {}? Its conversations{} and files go too. This cannot be undone.", p.name, if *q > 0 { format!(" and {q} queued messages") } else { String::new() }))
@@ -668,7 +678,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
             div.between style="padding:8px 4px" {
                 div.row style="gap:16px;align-items:center" { (picon(&p.id, &p.name, &p.icon_etag, 56)) div {
                     h1 { (p.name) }
-                    div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "none" } else { &p.pane_id }) } @if !owner { " · by " (owner_name) } }
+                    div.row.muted style="padding-top:6px" { (logo(agent_logo(&p.agent), "")) (agent_label(&p.agent)) " in herdr " span.mono { (if p.pane_id.is_empty() { "none" } else { &p.pane_id }) } @if !owner { ", owned by " (owner_name) } }
                 } }
                 @if owner {
                     div.row { a.btn href="#invite" { (ic("user-plus")) "Invite a tester" } }
@@ -714,7 +724,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                     div.main {
                         @if p.auto_active() {
                             section.card.attention {
-                                div.between { span style="font-size:13px;color:var(--amber)" { (p.name) " · agent access" } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
+                                div.between { span style="font-size:13px;color:var(--amber)" { "Agent access to " (p.name) } @if let Some(u) = p.auto_until { span.tag.warn { "until " (u.format("%H:%M UTC %b %d")) } } }
                                 div.row style="font-size:26px;font-weight:500;letter-spacing:-.02em" { span.ni { (ic("zap")) } "Auto relay is on" }
                                 p.muted style="margin:0" { "Messages go to your agent without your approval. Flagged messages still wait for you. Your agent's permission prompts stay on." }
                                 form method="post" action=(format!("/projects/{pid}/mode")) { (csrf(&a)) input type="hidden" name="mode" value="approve"; button.btn.amber type="submit" { (ic("pause")) "Turn off auto relay" } }
@@ -739,7 +749,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.stack {
                                 @for (aid, email, name, role, trusted, dtest, dprod) in &members {
                                     div.between {
-                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/sessions" { "session" } } @else { (role) } @if *trusted { " · may auto relay" } } } }
+                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/sessions" { "session" } } @else { (role) } @if *trusted { ", may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
                                                 form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
@@ -766,7 +776,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                 @for (cid, title, upd, stage, from, client, dep) in &convs {
                     a.item href=(format!("/conversations/{cid}")) {
                         span.l { (stage_tag(stage)) span { (truncate(title, 80)) } @if !dep.is_empty() { span.tag.ok { (dep.replace('_', " ")) } } }
-                        span.r { (from) " · " (logo(client_logo(client), "")) (client) " · " (ago(upd)) }
+                        span.r.row style="gap:8px;min-width:0" { (from) @if !client.is_empty() { span.tag.clip title=(client_text(client, from)) { (logo(client_logo(client), "")) span { (client_text(client, from)) } } } (ago(upd)) }
                     }
                 }
             }
@@ -786,7 +796,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.stack {
                                 @for (iid, label, uses, max, exp) in &invites {
                                     div.inset.between {
-                                        span { (if label.is_empty() { "invitation" } else { label }) span.faint style="font-size:13px" { " · " (uses) "/" (max) " used · expires " (exp.format("%b %d")) } }
+                                        span { (if label.is_empty() { "invitation" } else { label }) span.faint style="font-size:13px" { ", " (uses) " of " (max) " used, expires " (exp.format("%b %d")) } }
                                         form.inline method="post" action=(format!("/projects/{pid}/invites/{iid}/revoke")) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } }
                                     }
                                 }
@@ -1040,7 +1050,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
     Ok(Html(layout(&title, Some(&a), Some(format!("/conversations/{cid}/live")), html! {
         div.between style="padding:4px 0 16px" {
             div.crumbs { (picon(&p.id, &p.name, &p.icon_etag, 24)) a href=(format!("/projects/{pid}")) style="text-decoration:none" { (p.name) } span.sep { "/" } span.muted { (truncate(&title, 60)) } }
-            div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} @match &machine { Some(m) => { (m) @if online { " online" } @else { " offline" } }, None => { "No computer" } } } span.pill { @if p.auto_active() { "Auto relay" } @else { "Approval required" } } }
+            div.row { span.pill { span class=(format!("dot {}", if online { "ok" } else { "" })) {} @match &machine { Some(m) => { (m) @if online { " online" } @else { " offline" } }, None => { "No computer" } } } span.pill { @if p.auto_active() { (ic("zap")) "Auto relay" } @else { (ic("shield")) "Approval required" } } }
         }
         div.split style="padding-bottom:48px" {
             div.main.stack.timeline {
@@ -1080,7 +1090,7 @@ pub async fn conversation(State(app): State<App>, User(a): User, Path(cid): Path
                         dt { "Machine" } dd { (machine.unwrap_or_else(|| "none".into())) }
                         dt { "Pane" } dd.mono { (if p.pane_id.is_empty() { "none".to_string() } else { p.pane_id.clone() }) }
                         dt { "Agent" } dd { (logo(agent_logo(&p.agent), "")) " " (agent_label(&p.agent)) }
-                        @if let Some(m) = msgs.first() { dt { "Sender" } dd { (m.sender_label) " · " (logo(client_logo(&m.client_name), "")) " " (m.client_name) } }
+                        @if let Some(m) = msgs.first() { dt { "Sender" } dd.row style="gap:8px;flex-wrap:wrap" { (m.sender_label) @if !m.client_name.is_empty() { span.tag.clip title=(client_text(&m.client_name, &m.sender_label)) { (logo(client_logo(&m.client_name), "")) span { (client_text(&m.client_name, &m.sender_label)) } } } } }
                     }
                 }
                 @if !p.gliph_channel.is_empty() {
@@ -1104,13 +1114,13 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                 div.head {
                     div.who {
                         span.av-wrap { @if let Some(m) = m { img.ev-av src=(format!("/accounts/{}/avatar", m.sender_id)) alt=""; span.av-badge { (logo(client_logo(&m.client_name), "")) } } @else { span.avatar { (initials(&e.actor_name)) } } }
-                        div { div style="font-weight:500" { (e.actor_name) span.role { " · " @if m.map(|m| m.sender_id == p.owner_id).unwrap_or(false) { "developer" } @else { "tester" } } }
-                              @if let Some(m) = m { @if !m.client_name.is_empty() { div.role { "written by their assistant, " (m.client_name) } } } }
+                        div { div style="font-weight:500" { (e.actor_name) " " span.tag { @if m.map(|m| m.sender_id == p.owner_id).unwrap_or(false) { "developer" } @else { "tester" } } }
+                              @if let Some(m) = m { @if !m.client_name.is_empty() { div.role { @if m.client_name.starts_with("session: ") { "sent from their session link" } @else { "written by their assistant, " (m.client_name) } } } } }
                     }
                     span.time { (hhmm(&e.created_at)) }
                 }
                 div.body style="font-size:16px" { (text) }
-                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/attachments/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (human_size(x.size)) " · " (x.mime) } } } } }
+                @if !my_atts.is_empty() { div.row { @for x in &my_atts { a.inset href=(format!("/attachments/{}", x.id)) style="text-decoration:none;font-size:13px" { (x.name) span.faint { " " (human_size(x.size)) ", " (x.mime) } } } } }
             }
         },
         "system" => {
@@ -1165,7 +1175,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                 div.head {
                     div.who {
                         img.ev-av src=(format!("/accounts/{}/avatar", p.owner_id)) alt="";
-                        div { div style="font-weight:500" { (e.actor_name) span.role { " · developer" } }
+                        div { div style="font-weight:500" { (e.actor_name) " " span.tag { "developer" } }
                               @if let Some(via) = e.data["via"].as_str() { div.role { "the developer's words to the agent, summarized by " (via) } } }
                     }
                     span.time { (hhmm(&e.created_at)) }
@@ -1182,7 +1192,7 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
         "agent" => html! {
             article class=(if e.held { "card ev danger" } else { "card ev" }) {
                 div.head {
-                    span.who { span.ev-av.mark { (logo(agent_logo(&p.agent), "")) } span style="font-weight:500" { (e.actor_name) } span.role { "agent · " (match e.kind.as_str() { "final" => "final reply", "question" => "question for the tester", "progress" => "progress", _ => "reply" }) } }
+                    span.who { span.ev-av.mark { (logo(agent_logo(&p.agent), "")) } span style="font-weight:500" { (e.actor_name) } span.tag { (match e.kind.as_str() { "final" => "final reply", "question" => "question for the tester", "progress" => "progress", _ => "reply" }) } }
                     span.time { (hhmm(&e.created_at)) }
                 }
                 @if e.held {
@@ -1275,7 +1285,7 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
     html! {
         @for (sender, list) in &groups {
             section.list.approvals {
-                @if group { div.label.row { img.avatar-img src=(format!("/accounts/{sender}/avatar")) alt=""; (list[0].sender_label) " · " (list.len()) @if list.len() == 1 { " message" } @else { " messages" } } }
+                @if group { div.label.row { img.avatar-img src=(format!("/accounts/{sender}/avatar")) alt=""; (list[0].sender_label) span.tag { (list.len()) @if list.len() == 1 { " message" } @else { " messages" } } } }
                 @for m in list {
                     @let p = projects.iter().find(|p| p.id == m.project_id);
                     div.item.approval {
@@ -1283,7 +1293,7 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                             div.row {
                                 @if let Some(p) = p { (picon(&p.id, &p.name, &p.icon_etag, 22)) strong style="font-weight:500" { (p.name) } }
                                 span.faint style="font-size:13px" { (ago_text(&m.created_at)) }
-                                @if m.stage == "held" { span.tag.bad { "held · " (m.risk) } }
+                                @if m.stage == "held" { span.tag.bad { "held: " (m.risk) } }
                                 @if m.deploy_allow == "production" && p.map(|p| p.owner_id != m.sender_id).unwrap_or(true) { span.tag.warn { "deploys to production" } }
                                 @else if m.deploy_allow == "test" { span.tag.blue { "deploys to test" } }
                             }
@@ -1703,7 +1713,7 @@ pub async fn connect(State(app): State<App>, User(a): User, Query(f): Query<Flas
                 @if let Some(t) = &f.invite { div.secret { (t) } div.row { button.btn.small type="button" data-copy=(t) { (ic("copy")) "Copy token" } span.faint style="font-size:13px" { "Shown once." } } }
                 form method="post" action="/connect/token" class="row" { (csrf(&a)) label.sr for="tl" { "Label" } input id="tl" type="text" name="label" placeholder="Label, e.g. Claude Code on laptop" style="flex:1 1 240px;width:auto" maxlength="64"; button.btn type="submit" { (ic("key")) "Create token" } }
                 @for (h, label, exp) in &tokens {
-                    div.inset.between { span { (if label.is_empty() { "token" } else { label }) span.faint { " · expires " (exp.format("%b %d")) } } form.inline method="post" action=(format!("/connect/token/{}/revoke", &h[..16])) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } } }
+                    div.inset.between { span { (if label.is_empty() { "token" } else { label }) span.faint { ", expires " (exp.format("%b %d")) } } form.inline method="post" action=(format!("/connect/token/{}/revoke", &h[..16])) { (csrf(&a)) button.btn.small.danger type="submit" { (ic("trash")) "Revoke" } } }
                 }
             }
         }
@@ -1840,7 +1850,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                                 span.ev-av.mark { (ic("monitor")) }
                                 span.stack style="gap:2px;align-items:flex-start" {
                                     span.row { span class=(format!("dot {}", if app.machine_online(mid) { "ok" } else { "" })) {} strong style="font-weight:500" { (name) } }
-                                    span.faint style="font-size:13px" { (platform) " · relay " (version) }
+                                    span.faint style="font-size:13px" { (platform) ", relay " (version) }
                                 }
                             }
                             span.r.row {
@@ -1852,7 +1862,7 @@ pub async fn machines(State(app): State<App>, User(a): User) -> Result<Response,
                                             @let name = pp.map(|p| p.name.clone()).unwrap_or_else(|| pn["title"].as_str().unwrap_or("").to_string());
                                             @let st = match pn["status"].as_str().unwrap_or("") { "working" => "working", "blocked" => "blocked", _ => "free" };
                                             @let agent = pn["agent"].as_str().unwrap_or("");
-                                            span.mini data-tip=(format!("{name} · {st}")) {
+                                            span.mini data-tip=(format!("{name}: {st}")) {
                                                 @match pp { Some(p) => (picon(&p.id, &p.name, &p.icon_etag, 26)), None => span.picon.tile style="width:26px;height:26px;font-size:11px" { (name.chars().next().unwrap_or('?')) } }
                                                 span class=(format!("agent-mark {st}{}", if agent.contains("claude") { " claude" } else { "" })) { (logo(agent_logo(agent), "")) }
                                             }
@@ -1889,7 +1899,7 @@ pub async fn machine_detail(State(app): State<App>, User(a): User, Path(mid): Pa
                         div.row style="gap:8px;font-size:14px;color:var(--text-2)" {
                             span class=(format!("dot {}", if online { "ok" } else { "" })) {}
                             @if online { "Connected" } @else if let Some(s) = &seen { "Last seen " (ago_text(s)) } @else { "Never connected" }
-                            span.faint { "· " (platform) " · relay " (version) }
+                            span.faint { (platform) ", relay " (version) }
                         }
                     }
                 }

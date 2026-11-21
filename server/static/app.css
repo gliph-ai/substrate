@@ -137,6 +137,9 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .tag.bad { --dot: var(--red); }
 .tag.blue { --dot: #8FA8FF; }
 .tag.off { --dot: var(--faint); color: var(--muted); }
+/* A chip holding free text (a client name): shrinks and ends in an ellipsis. */
+.tag.clip { min-width: 0; max-width: 100%; }
+.tag.clip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag.off::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); flex: none; }
 .tag.blue::before { animation: tag-pulse 1.2s ease-in-out infinite; }
 @keyframes tag-pulse { 50% { opacity: .35; } }
