@@ -71,6 +71,8 @@ enum Cmd {
     Note { id: String, #[arg(long)] text: String },
     /// (For agents, in a review) Send the request as you and the developer agreed it, and why it changed.
     Propose { id: String, #[arg(long)] text: String, #[arg(long, default_value = "")] why: String },
+    /// (For agents) Send a follow-up back to the developer: it does not fit this conversation's work.
+    Hold { id: String, #[arg(long)] why: String },
     /// (For agents) Ask the tester a question.
     Ask { id: String, #[arg(long)] text: String },
     /// (For agents) Reply to a message. Add --final when the work is done.
@@ -388,6 +390,11 @@ async fn run() -> Result<()> {
             let r = record(&paths, &id)?;
             report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "propose".into(), text: read_text(&text)?, why: read_text(&why)?, ..Default::default() }).await?;
             println!("Sent. It waits for the developer's approval; you get it as a normal Substrate message then.");
+        }
+        Cmd::Hold { id, why } => {
+            let r = record(&paths, &id)?;
+            report(&api, Report { message_id: id, reply_token: r.reply_token, kind: "hold".into(), text: read_text(&why)?, ..Default::default() }).await?;
+            println!("Sent back to the developer. Stop work on it; if they approve it, you get it again as a normal Substrate message.");
         }
         Cmd::Ask { id, text } => {
             let r = record(&paths, &id)?;

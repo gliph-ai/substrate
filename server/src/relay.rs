@@ -317,8 +317,12 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             if !forward {
                 return Ok(());
             }
-            sqlx::query("UPDATE messages SET stage=$2, agent_idle=$3, updated_at=now() WHERE id=$1")
-                .bind(&m.id).bind(stage_s).bind(stage == AckStage::AgentIdle).execute(&app.db).await?;
+            // Guarded by what was read: a hold, reject or cancel in between wins.
+            let n = sqlx::query("UPDATE messages SET stage=$2, agent_idle=$3, updated_at=now() WHERE id=$1 AND delivery_id=$4 AND stage=$5")
+                .bind(&m.id).bind(stage_s).bind(stage == AckStage::AgentIdle).bind(&delivery_id).bind(&m.stage).execute(&app.db).await?.rows_affected();
+            if n == 0 {
+                return Ok(());
+            }
             add_event(app, &m.conversation_id, &m.id, "relay", &p.handle, "stage", &text, json!({"message_id": m.id, "stage": stage_s}), false).await?;
             if free {
                 audit(app, account, &p.id, &p.handle, "delivery.ack", &m.id, stage_s).await;
@@ -453,12 +457,21 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             add_event(&app, &m.conversation_id, &m.id, "agent", &agent_name, &r.kind, &text, json!({"message_id": m.id, "attachments": atts, "secret_hits": hits}), held).await?;
         }
         "ask" => {
-            sqlx::query("UPDATE messages SET stage='awaiting_sender', question=$2, agent_idle=false, updated_at=now() WHERE id=$1").bind(&m.id).bind(&text).execute(&app.db).await?;
+            // Guarded by the token read: a hold that spent it meanwhile wins.
+            let n = sqlx::query("UPDATE messages SET stage='awaiting_sender', question=$2, agent_idle=false, updated_at=now() WHERE id=$1 AND reply_hash=$3")
+                .bind(&m.id).bind(&text).bind(&m.reply_hash).execute(&app.db).await?.rows_affected();
+            if n == 0 {
+                return Err(Fail::new(409, "this message changed meanwhile"));
+            }
             add_event(&app, &m.conversation_id, &m.id, "agent", &agent_name, "question", &text, json!({"message_id": m.id, "secret_hits": hits}), held).await?;
             domain::pump(&app, &p.id).await?;
         }
         "final" => {
-            sqlx::query("UPDATE messages SET stage='completed', agent_idle=false, updated_at=now() WHERE id=$1").bind(&m.id).execute(&app.db).await?;
+            let n = sqlx::query("UPDATE messages SET stage='completed', agent_idle=false, updated_at=now() WHERE id=$1 AND reply_hash=$2")
+                .bind(&m.id).bind(&m.reply_hash).execute(&app.db).await?.rows_affected();
+            if n == 0 {
+                return Err(Fail::new(409, "this message changed meanwhile"));
+            }
             add_event(&app, &m.conversation_id, &m.id, "agent", &agent_name, "final", &text, json!({"message_id": m.id, "attachments": atts, "secret_hits": hits}), held).await?;
             domain::pump(&app, &p.id).await?;
         }
@@ -467,6 +480,39 @@ pub async fn report(State(app): State<App>, headers: HeaderMap, Json(r): Json<Re
             // the agent: the tester hears them from the developer.
             let who = domain::account_label(&app, &p.owner_id).await;
             add_event(&app, &m.conversation_id, &m.id, "developer", &who, "note", &text, json!({"message_id": m.id, "by": who, "via": agent_name, "secret_hits": hits}), held).await?;
+        }
+        "hold" => {
+            // The agent's fit check: this follow-up went on without its own approval and
+            // reads as new work. Back to the developer, who decides on it as a held message;
+            // the conversation's next follow-ups wait too until they approve one.
+            if !m.followup {
+                return Err(Fail::new(409, "only a follow-up sent on without approval can be held; ask the developer in your reply instead"));
+            }
+            let mut tx = app.db.begin().await?;
+            sqlx::query("SELECT 1 FROM conversations WHERE id=$1 FOR UPDATE").bind(&m.conversation_id).execute(&mut *tx).await?;
+            let why = proto::sanitize(&r.text, 1000);
+            let n = sqlx::query("UPDATE messages SET stage='held', risk=CASE WHEN risk='' THEN 'off-topic' ELSE risk || ',off-topic' END, followup=false, hold_why=$3,
+                    delivery_id='', reply_hash='', agent_idle=false, updated_at=now() WHERE id=$1 AND followup AND stage = ANY($2) AND reply_hash=$4")
+                .bind(&m.id).bind(domain::IN_FLIGHT).bind(&why).bind(&m.reply_hash).execute(&mut *tx).await?.rows_affected();
+            if n == 0 {
+                return Err(Fail::new(409, "this message can no longer be held"));
+            }
+            // Follow-ups queued behind it went on under the same approval: they wait now too.
+            let queued = sqlx::query_as::<_, Message>("UPDATE messages SET stage='pending_approval', followup=false, updated_at=now() WHERE conversation_id=$1 AND stage='approved' AND followup RETURNING *")
+                .bind(&m.conversation_id).fetch_all(&mut *tx).await?;
+            sqlx::query("UPDATE conversations SET approved=false WHERE id=$1").bind(&m.conversation_id).execute(&mut *tx).await?;
+            tx.commit().await?;
+            // The reason is for the developer (`hold_why`); the tester hears only the stage.
+            add_event(&app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "The agent stopped: this reads as new work, so it waits for the developer's approval.",
+                json!({"message_id": m.id, "stage": "held"}), false).await?;
+            crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), m.id.clone(), p.name.clone(), m.sender_label.clone(), m.text.clone(), true);
+            for q in queued {
+                add_event(&app, &q.conversation_id, &q.id, "system", "Substrate", "stage", "Waiting for the developer's approval. The agent has not received it yet.",
+                    json!({"message_id": q.id, "stage": "pending_approval"}), false).await?;
+                crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), q.id.clone(), p.name.clone(), q.sender_label.clone(), q.text.clone(), false);
+            }
+            app.changed(&account);
+            domain::pump(&app, &p.id).await?;
         }
         "propose" => {
             // The request as the developer and the agent agreed it in a review. It

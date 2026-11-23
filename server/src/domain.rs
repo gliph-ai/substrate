@@ -68,6 +68,10 @@ pub struct Message {
     /// The request as the developer and their agent rewrote it in a review (`substrate propose`).
     pub proposal: String,
     pub proposal_why: String,
+    /// Sent on without its own approval: the delivery asks the agent to check it fits.
+    pub followup: bool,
+    /// The agent's reason when it sent that follow-up back (`substrate hold`).
+    pub hold_why: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -314,16 +318,20 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let trusted: bool = sqlx::query_scalar("SELECT trusted_auto FROM members WHERE project_id=$1 AND account_id=$2")
         .bind(&p.id).bind(m.sender_id).fetch_optional(&app.db).await?.unwrap_or(false);
     // A follow-up in a conversation the developer approved goes straight on, while
-    // nothing in it still waits. The row lock orders this against decisions in it.
+    // nothing in it still waits, and only to a relay that has `substrate hold` for
+    // the fit check. The row lock orders this against decisions in it.
+    let v: Option<String> = sqlx::query_scalar("SELECT version FROM machines WHERE id=$1").bind(&p.machine_id).fetch_optional(&app.db).await?;
+    let can_hold = v.is_some_and(|v| version(&v) >= FOLLOWUP_RELAY);
     let mut tx = app.db.begin().await?;
     let approved: bool = sqlx::query_scalar("SELECT approved FROM conversations WHERE id=$1 FOR UPDATE")
         .bind(&conv).fetch_one(&mut *tx).await?;
     // A second statement, so it sees what a decision that held the lock committed.
-    let followup = approved && !sqlx::query_scalar::<_, bool>(
+    let followup = can_hold && approved && !sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM messages WHERE conversation_id=$1 AND stage IN ('pending_approval','held','reviewing'))")
         .bind(&conv).fetch_one(&mut *tx).await?;
     let auto = role == "owner" || p.auto_active() || trusted;
     let stage = if !flags.is_empty() { "held" } else if auto || followup { "approved" } else { "pending_approval" };
+    let check = stage == "approved" && !auto;
     // What the agent may deploy while it works on this; the relay's guard enforces it.
     // Checked above against the sender's permissions. An answer keeps its message's.
     let deploy: String = match m.deploy {
@@ -337,12 +345,12 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     };
 
     let inserted = sqlx::query_as::<_, Message>(
-        "INSERT INTO messages (id, conversation_id, project_id, sender_id, sender_label, client_name, kind, text, envelope, idem_key, stage, risk, expires_at, deploy_allow)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        "INSERT INTO messages (id, conversation_id, project_id, sender_id, sender_label, client_name, kind, text, envelope, idem_key, stage, risk, expires_at, deploy_allow, followup)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (sender_id, idem_key) WHERE idem_key <> '' DO NOTHING RETURNING *",
     )
     .bind(&mid).bind(&conv).bind(&p.id).bind(m.sender_id).bind(&label).bind(m.client_name).bind(m.kind).bind(&text)
-    .bind(&envelope).bind(m.idem_key).bind(stage).bind(flags.join(",")).bind(now() + Duration::days(MESSAGE_TTL_DAYS)).bind(&deploy)
+    .bind(&envelope).bind(m.idem_key).bind(stage).bind(flags.join(",")).bind(now() + Duration::days(MESSAGE_TTL_DAYS)).bind(&deploy).bind(check)
     .fetch_optional(&mut *tx).await?;
     if inserted.is_some() && role == "owner" {
         // The developer writing in a conversation approves it too.
@@ -366,7 +374,7 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let (sys, detail) = match stage {
         "held" => (format!("Held for the developer. It matched {}. The agent has not received it.", flags.join(", ")), "held"),
         "approved" if role == "owner" => ("Sent by the developer. Queued for the agent.".to_string(), "auto"),
-        "approved" if !auto => ("The developer approved this conversation. Queued for the agent without asking again.".to_string(), "followup"),
+        "approved" if !auto => ("The developer approved this conversation. Queued for the agent without asking again; it checks this fits the work so far.".to_string(), "followup"),
         "approved" => ("Auto relay is on. Queued for the agent without approval.".to_string(), "auto"),
         _ => ("Waiting for the developer's approval. The agent has not received it yet.".to_string(), "pending"),
     };
@@ -383,6 +391,8 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
 
 /// The relay that understands a review delivery (a second delivery of the same message).
 const REVIEW_RELAY: (u32, u32, u32) = (0, 1, 15);
+/// The relay that has `substrate hold`, for the follow-up fit check.
+const FOLLOWUP_RELAY: (u32, u32, u32) = (0, 1, 16);
 
 fn version(v: &str) -> (u32, u32, u32) {
     let mut it = v.trim_start_matches('v').split(['.', '-']).map(|x| x.parse().unwrap_or(0));
@@ -441,7 +451,7 @@ pub async fn send_review(app: &AppInner, m: &Message, p: &Project) -> Result<boo
     // Review only: no attachments are downloaded and nothing may be deployed.
     let sent = app.send_machine(&p.machine_id, CloudFrame::Deliver {
         delivery_id: m.delivery_id.clone(), message_id: m.id.clone(), project_id: p.id.clone(), envelope: env, reply_token,
-        attachments: vec![], deploy: "none".into(), review: true,
+        attachments: vec![], deploy: "none".into(), review: true, check: false,
     });
     // The new token counts only once it went out: a failed send leaves a running review's token valid.
     if sent {
@@ -574,6 +584,20 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
         return Box::pin(pump(app, pid)).await;
     }
 
+    // The fit check needs `substrate hold`: a relay that went back to an older
+    // version gets the follow-up only once the developer approves it.
+    if m.followup {
+        let v: String = sqlx::query_scalar("SELECT version FROM machines WHERE id=$1").bind(&p.machine_id).fetch_one(&app.db).await?;
+        if version(&v) < FOLLOWUP_RELAY {
+            let n = sqlx::query("UPDATE messages SET stage='pending_approval', followup=false, updated_at=now() WHERE id=$1 AND stage='approved'")
+                .bind(&m.id).execute(&app.db).await?.rows_affected();
+            if n > 0 {
+                add_event(app, &m.conversation_id, &m.id, "system", "Substrate", "stage", "Waiting for the developer's approval. The agent has not received it yet.", json!({"message_id": m.id, "stage": "pending_approval"}), false).await?;
+                crate::push::approval_waiting(app.db.clone(), p.owner_id.clone(), m.id.clone(), p.name.clone(), m.sender_label.clone(), m.text.clone(), false);
+            }
+            return Box::pin(pump(app, pid)).await;
+        }
+    }
     let reply_token = token();
     let delivery = id("d");
     sqlx::query("UPDATE messages SET stage='dispatched', delivery_id=$2, reply_hash=$3, agent_idle=false, updated_at=now() WHERE id=$1")
@@ -588,7 +612,8 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     }).collect();
     let sent = app.send_machine(&p.machine_id, CloudFrame::Deliver {
         delivery_id: delivery.clone(), message_id: m.id.clone(), project_id: pid.to_string(),
-        envelope: m.envelope.clone(), reply_token, attachments, deploy: m.deploy_allow.clone(), review: false,
+        envelope: if m.followup { proto::followup_envelope(&m.envelope, &m.id) } else { m.envelope.clone() },
+        reply_token, attachments, deploy: m.deploy_allow.clone(), review: false, check: m.followup,
     });
     if !sent {
         // The socket closed between the check and the send: back to the queue.

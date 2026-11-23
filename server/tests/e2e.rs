@@ -611,8 +611,8 @@ async fn question_round_trip_and_concurrent_projects() {
     assert_eq!(g["next_action"], "answer_question");
     assert_eq!(g["question"]["agent_text"], "Which browser are you on?");
     let ans = t.mcp(&w.pat, "reply", json!({"message_id": mid, "text": "Safari 18"})).await;
-    // The developer approved this conversation, so the answer goes on without asking again.
-    assert!(matches!(ans["structuredContent"]["stage"].as_str(), Some("approved" | "dispatched")));
+    // An older relay has no `substrate hold` for the fit check: the answer still waits.
+    assert_eq!(ans["structuredContent"]["stage"], "pending_approval");
     assert_eq!(t.stage(&mid).await, "answered");
 
     // A conversation whose last decision was a rejection asks again.
@@ -922,4 +922,52 @@ async fn review_with_the_agent_then_approve_the_adjusted_request() {
     assert_eq!(edit["actor"], "developer");
     let text = edit["text"].as_str().unwrap();
     assert!(text.contains("I adjusted your request") && text.contains("red and blue at once") && text.contains("Make the save button red."), "{text}");
+}
+
+#[tokio::test]
+async fn followups_in_an_approved_conversation_go_on_with_a_fit_check() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let mut ws = t.ws_v(&w.machine, vec![pane("w1:p1", "s1", "idle")], "0.1.16").await;
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "The save button is grey."})).await;
+    let first = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let cid: String = sqlx::query_scalar("SELECT conversation_id FROM messages WHERE id=$1").bind(&first).fetch_one(&t.app.db).await.unwrap();
+    t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{first}/approve"), json!({})).await;
+    let (_, m1, env1, _) = deliver(&mut ws).await;
+    assert_eq!(m1, first);
+    assert!(!env1.contains("substrate hold"), "an approved message has no fit check");
+    sqlx::query("UPDATE messages SET stage='completed' WHERE id=$1").bind(&first).execute(&t.app.db).await.unwrap();
+
+    // A follow-up goes on without approval, with the fit check in its frame.
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "conversation_id": cid, "text": "Also redo the whole login page."})).await;
+    let fid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let (_, m2, env2, rt) = deliver(&mut ws).await;
+    assert_eq!(m2, fid);
+    assert!(env2.contains(&format!("substrate hold {fid}")) && env2.find("This is a follow-up").unwrap() < env2.find("<<<UNTRUSTED").unwrap(), "{env2}");
+
+    // Another follow-up queues behind it under the same approval.
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "conversation_id": cid, "text": "And the footer."})).await;
+    let qid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    assert_eq!(t.stage(&qid).await, "approved");
+    // Only a follow-up can be held.
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": first, "reply_token": "x", "kind": "hold", "text": "no"})).await;
+    assert_ne!(st, 200);
+    // The agent finds it is new work and sends it back.
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": fid, "reply_token": rt, "kind": "hold", "text": "The login page is new work, not the save button."})).await;
+    assert_eq!(st, 200);
+    assert_eq!(t.stage(&fid).await, "held");
+    assert_eq!(t.stage(&qid).await, "pending_approval", "the queued follow-up waits too");
+    let page = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("sent this follow-up back") && page.contains("The login page is new work"), "the developer sees why");
+    let (st, _) = t.relay_api(&w.machine, "POST", "/relay/report", json!({"message_id": fid, "reply_token": rt, "kind": "final", "text": "done"})).await;
+    assert_ne!(st, 200, "the held delivery's token is spent");
+    // The next follow-up waits for the developer too.
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "conversation_id": cid, "text": "please"})).await;
+    assert_eq!(r["structuredContent"]["stage"], "pending_approval");
+
+    // Approved: the agent gets it again, without the fit check.
+    t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{fid}/approve"), json!({})).await;
+    let (_, m3, env3, _) = deliver(&mut ws).await;
+    assert_eq!(m3, fid);
+    assert!(!env3.contains("substrate hold"), "{env3}");
 }

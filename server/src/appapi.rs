@@ -120,6 +120,7 @@ fn message_json(app: &AppInner, m: &Message, projects: &[Project], with_prompt: 
         "id": m.id, "conversation_id": m.conversation_id, "kind": m.kind, "text": m.text, "stage": m.stage,
         "deploy_stage": if m.deploy_stage.is_empty() { Value::Null } else { json!(m.deploy_stage) },
         "deploy_allow": m.deploy_allow, "risk": m.risk, "client": m.client_name,
+        "hold_why": if m.hold_why.is_empty() || m.stage != "held" { Value::Null } else { json!(m.hold_why) },
         "proposal": if m.proposal.is_empty() { Value::Null } else { json!({"text": m.proposal, "why": m.proposal_why}) },
         "sender": {"id": m.sender_id, "name": m.sender_label, "avatar_url": format!("{}/accounts/{}/avatar", app.cfg.public_url, m.sender_id)},
         "project": p.map(|p| project_json(app, p)),

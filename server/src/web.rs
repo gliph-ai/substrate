@@ -433,7 +433,7 @@ fn landing() -> Html<String> {
             h2 { "Four steps from chat to fix" }
             div.grid {
                 div.card { span.mono style="color:#8FA8FF;font-size:12px" { "01" } h3 { "Testers ask their assistant" } span.muted { "They tell Claude, ChatGPT or another MCP client. It sends their words and screenshots to Substrate." } }
-                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "Approve on the web, in the Sidra app, in the CLI or with /substrate approve in Gliph. Rewrite a request first, or go over it with your agent. The tester sees the new version, with your reason when you give one. Follow-ups and answers in a conversation you approved go straight on. Auto relay skips this step." } }
+                div.card { span.mono style="color:var(--amber);font-size:12px" { "02" } h3 { "You approve" } span.muted { "Approve on the web, in the Sidra app, in the CLI or with /substrate approve in Gliph. Rewrite a request first, or go over it with your agent. The tester sees the new version, with your reason when you give one. Follow-ups in a conversation you approved go straight on; the agent sends one back to you if it is new work. Auto relay skips this step." } }
                 div.card { span.mono style="color:var(--teal);font-size:12px" { "03" } h3 { "Your agent gets the message" } span.muted { "The relay on your Mac connects out to Substrate and types the message into your Herdr pane. You open no ports." } }
                 div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "Testers hear back" } span.muted { "They get progress, questions, notes from you about the work, and CI and deploy updates, then a note when the fix is ready to retest." } }
             }
@@ -1142,12 +1142,12 @@ pub(crate) fn event_card(_app: &AppInner, a: &Account, p: &Project, msgs: &[Mess
                         } } span.time { (hhmm(&e.created_at)) } }
                     div.body style="color:var(--text-2)" { (text) }
                     @if attention { @if let Some(m) = m {
-                        @if !m.risk.is_empty() { div.tag.bad { "risk flags: " (m.risk) } }
+                        @if !m.risk.is_empty() && m.risk != "off-topic" { div.tag.bad { "risk flags: " (m.risk.replace(",off-topic", "")) } }
                         p.muted style="margin:0;font-size:14px" { @if m.proposal.is_empty() { "Your agent gets this text:" } @else { "The tester's original prompt. Approve adjusted sends the adjusted request instead." } }
                         div.envelope { (envelope_markup(&m.envelope)) }
                         (review_part(m))
                         div.row {
-                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver it to your agent anyway?")] { (csrf(a)) (proposal_fields(m)) button.btn.primary type="submit" { (ic("check")) (approve_label(m)) } } }
+                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/messages/{}/approve", m.id)) data-confirm=[risk_confirm(m, false)] { (csrf(a)) (proposal_fields(m)) button.btn.primary type="submit" { (ic("check")) (approve_label(m)) } } }
                             form.inline method="post" action=(format!("/messages/{}/reject", m.id)) { (csrf(a)) button.btn type="submit" { (ic("x")) "Reject" } }
                             (review_button(a, &format!("/messages/{}/review", m.id), m, ""))
                         }
@@ -1294,7 +1294,11 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                             div.row {
                                 @if let Some(p) = p { (picon(&p.id, &p.name, &p.icon_etag, 22)) strong style="font-weight:500" { (p.name) } }
                                 span.faint style="font-size:13px" { (ago_text(&m.created_at)) }
-                                @if m.stage == "held" { span.tag.bad { "held: " (m.risk) } }
+                                @if m.stage == "held" {
+                                    @let rules = m.risk.split(',').filter(|r| !r.is_empty() && *r != "off-topic").collect::<Vec<_>>().join(",");
+                                    @if !rules.is_empty() { span.tag.bad { "held: " (rules) } }
+                                    @if m.risk.contains("off-topic") { span.tag.warn { "new work" } }
+                                }
                                 @if m.deploy_allow == "production" && p.map(|p| p.owner_id != m.sender_id).unwrap_or(true) { span.tag.warn { "deploys to production" } }
                                 @else if m.deploy_allow == "test" { span.tag.blue { "deploys to test" } }
                             }
@@ -1304,7 +1308,7 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                             @if m.stage != "reviewing" { (edit_form(a, &format!("/approvals/{}/approve", m.id), m, back)) }
                         }
                         div.row style="flex:none;align-self:flex-start" {
-                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); (proposal_fields(m)) button.btn.primary.small type="submit" { (ic("check")) (approve_label(m)) } } }
+                            @if m.stage != "reviewing" { form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) data-confirm=[risk_confirm(m, false)] { (csrf(a)) input type="hidden" name="back" value=(back); (proposal_fields(m)) button.btn.primary.small type="submit" { (ic("check")) (approve_label(m)) } } }
                             form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
                             (review_button(a, &format!("/approvals/{}/review", m.id), m, back))
                             a.btn.small.tertiary href=(format!("/conversations/{}", m.conversation_id)) title="Conversation" { (ic("eye")) }
@@ -1324,7 +1328,7 @@ fn edit_form(a: &Account, action: &str, m: &Message, back: &str) -> Markup {
         details.edit open[proposed] {
             summary.faint style="font-size:13px;cursor:pointer" { @if proposed { "Edit the adjusted request" } @else { "Edit before approving" } }
             form.stack method="post" action=(action) style="gap:8px;margin-top:8px"
-                data-confirm=[(!m.risk.is_empty()).then_some("This message matched a risk rule. Deliver the edited message to your agent anyway?")] {
+                data-confirm=[risk_confirm(m, true)] {
                 (csrf(a))
                 @if !back.is_empty() { input type="hidden" name="back" value=(back); }
                 textarea aria-label="The message the agent gets" name="text" rows="6" required maxlength="8000" { @if proposed { (m.proposal) } @else { (m.text) } }
@@ -1341,11 +1345,16 @@ fn review_part(m: &Message) -> Markup {
     html! {
         @if m.stage == "reviewing" {
             div.notice.warn role="status" { span.ni { (ic("terminal")) } div.nb { "In review with your agent. Talk it over in the agent's session; when you agree, the agent sends the adjusted request here to approve." } }
-        } @else if !m.proposal.is_empty() {
+        } @else {
+            @if !m.hold_why.is_empty() && m.stage == "held" {
+                div.notice.warn role="status" { span.ni { (ic("terminal")) } div.nb { "Your agent sent this follow-up back: it reads as new work. " (m.hold_why) } }
+            }
+            @if !m.proposal.is_empty() {
             div.stack style="gap:6px" {
                 span.faint style="font-size:13px" { "Adjusted in review. The agent gets this, and the tester sees it from you:" }
                 div style="white-space:pre-wrap" { (m.proposal) }
                 @if !m.proposal_why.is_empty() { div.faint style="white-space:pre-wrap;font-size:14px" { "Why: " (m.proposal_why) } }
+            }
             }
         }
     }
@@ -1355,6 +1364,18 @@ fn review_part(m: &Message) -> Markup {
 /// what was agreed, not the tester's original.
 fn proposal_fields(m: &Message) -> Markup {
     html! { @if !m.proposal.is_empty() { input type="hidden" name="text" value=(m.proposal); input type="hidden" name="why" value=(m.proposal_why); } }
+}
+
+/// The confirm before a held message goes on: a risk rule, or the agent's fit check.
+fn risk_confirm(m: &Message, edited: bool) -> Option<&'static str> {
+    let rule = m.risk.split(',').any(|r| r != "off-topic" && !r.is_empty());
+    match (rule, m.risk.contains("off-topic"), edited) {
+        (true, _, false) => Some("This message matched a risk rule. Deliver it to your agent anyway?"),
+        (true, _, true) => Some("This message matched a risk rule. Deliver the edited message to your agent anyway?"),
+        (false, true, false) => Some("Your agent sent this back as new work. Deliver it to your agent anyway?"),
+        (false, true, true) => Some("Your agent sent this back as new work. Deliver the edited message to your agent anyway?"),
+        _ => None,
+    }
 }
 
 fn approve_label(m: &Message) -> &'static str {

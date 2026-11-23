@@ -56,6 +56,9 @@ pub struct Record {
     /// A review-only delivery: the real one of the same message may follow.
     #[serde(default)]
     pub review: bool,
+    /// A follow-up with the fit check: if the agent holds it, the approved one may follow.
+    #[serde(default)]
+    pub check: bool,
     /// The agent's session when it was handed this: the guard matches hooks to it.
     #[serde(default)]
     pub agent_session: String,
@@ -194,10 +197,11 @@ impl Relay {
                 inner.bindings = projects.into_iter().map(|b| (b.project_id.clone(), b)).collect();
                 inner.state_sent.clear();
             }
-            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments, deploy, review } => {
+            CloudFrame::Deliver { delivery_id, message_id, project_id, envelope, reply_token, attachments, deploy, review, check } => {
                 // A review goes before the real delivery of the same message, and a
-                // review may be asked again: either one is new text for the agent.
-                let fresh = |e: &Record| (e.review || review) && e.delivery_id != delivery_id;
+                // review may be asked again: either one is new text for the agent. So
+                // is the approved delivery of a follow-up the agent held.
+                let fresh = |e: &Record| (e.review || e.check || review) && e.delivery_id != delivery_id;
                 if let Some(mut existing) = self.record(&message_id).filter(|e| !fresh(e)) {
                     // A repeat (the cloud re-sent after a reconnect). Never a
                     // second submission: adopt the new delivery id, re-ack.
@@ -223,7 +227,7 @@ impl Relay {
                     message_id: message_id.clone(), delivery_id, project_id: project_id.clone(), envelope, reply_token, attachments,
                     state: "received".into(), pane_id: b.as_ref().map(|b| b.pane_id.clone()).unwrap_or_default(),
                     cwd: b.as_ref().map(|b| b.cwd.clone()).unwrap_or_default(), received_at: now_s(), submitted_at: 0, saw_working: false, reported_uncertain: false,
-                    agent_session: b.as_ref().map(|b| b.agent_session.clone()).unwrap_or_default(), deploy, review,
+                    agent_session: b.as_ref().map(|b| b.agent_session.clone()).unwrap_or_default(), deploy, review, check,
                 };
                 self.save(&r);
                 let mut inner = self.inner.lock().unwrap();
