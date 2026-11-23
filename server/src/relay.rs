@@ -317,9 +317,16 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             if !forward {
                 return Ok(());
             }
-            // Guarded by what was read: a hold, reject or cancel in between wins.
-            let n = sqlx::query("UPDATE messages SET stage=$2, agent_idle=$3, updated_at=now() WHERE id=$1 AND delivery_id=$4 AND stage=$5")
-                .bind(&m.id).bind(stage_s).bind(stage == AckStage::AgentIdle).bind(&delivery_id).bind(&m.stage).execute(&app.db).await?.rows_affected();
+            // Guarded by the delivery and the stages it may move on from: a hold, reject
+            // or cancel in between wins, and it never moves backwards. Acks from one relay
+            // are handled one at a time (the read loop awaits each frame), so their
+            // events keep their order; a delivery belongs to one machine.
+            let before: Vec<&str> = match new {
+                Some(n) => order[..=n].iter().copied().filter(|s| *s != stage_s || stage == AckStage::AgentIdle).collect(),
+                None => order.to_vec(),
+            };
+            let n = sqlx::query("UPDATE messages SET stage=$2, agent_idle=$3, updated_at=now() WHERE id=$1 AND delivery_id=$4 AND stage = ANY($5) AND NOT (agent_idle AND $3)")
+                .bind(&m.id).bind(stage_s).bind(stage == AckStage::AgentIdle).bind(&delivery_id).bind(&before).execute(&app.db).await?.rows_affected();
             if n == 0 {
                 return Ok(());
             }
