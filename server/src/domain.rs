@@ -313,15 +313,24 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let flags = safety::risk_flags(&text);
     let trusted: bool = sqlx::query_scalar("SELECT trusted_auto FROM members WHERE project_id=$1 AND account_id=$2")
         .bind(&p.id).bind(m.sender_id).fetch_optional(&app.db).await?.unwrap_or(false);
+    // A follow-up in a conversation the developer approved goes straight on, while
+    // nothing in it still waits. The row lock orders this against decisions in it.
+    let mut tx = app.db.begin().await?;
+    let approved: bool = sqlx::query_scalar("SELECT approved FROM conversations WHERE id=$1 FOR UPDATE")
+        .bind(&conv).fetch_one(&mut *tx).await?;
+    // A second statement, so it sees what a decision that held the lock committed.
+    let followup = approved && !sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM messages WHERE conversation_id=$1 AND stage IN ('pending_approval','held','reviewing'))")
+        .bind(&conv).fetch_one(&mut *tx).await?;
     let auto = role == "owner" || p.auto_active() || trusted;
-    let stage = if !flags.is_empty() { "held" } else if auto { "approved" } else { "pending_approval" };
+    let stage = if !flags.is_empty() { "held" } else if auto || followup { "approved" } else { "pending_approval" };
     // What the agent may deploy while it works on this; the relay's guard enforces it.
     // Checked above against the sender's permissions. An answer keeps its message's.
     let deploy: String = match m.deploy {
         Some(d) => d.to_string(),
         None => match m.conversation_id {
             Some(c) if m.kind == "answer" => sqlx::query_scalar("SELECT deploy_allow FROM messages WHERE conversation_id=$1 ORDER BY order_n DESC LIMIT 1")
-                .bind(c).fetch_optional(&app.db).await?.unwrap_or_else(|| "none".into()),
+                .bind(c).fetch_optional(&mut *tx).await?.unwrap_or_else(|| "none".into()),
             _ if role == "owner" => "production".into(),
             _ => "none".into(),
         },
@@ -334,7 +343,12 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     )
     .bind(&mid).bind(&conv).bind(&p.id).bind(m.sender_id).bind(&label).bind(m.client_name).bind(m.kind).bind(&text)
     .bind(&envelope).bind(m.idem_key).bind(stage).bind(flags.join(",")).bind(now() + Duration::days(MESSAGE_TTL_DAYS)).bind(&deploy)
-    .fetch_optional(&app.db).await?;
+    .fetch_optional(&mut *tx).await?;
+    if inserted.is_some() && role == "owner" {
+        // The developer writing in a conversation approves it too.
+        sqlx::query("UPDATE conversations SET approved=true WHERE id=$1").bind(&conv).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
     let Some(_inserted) = inserted else {
         // A concurrent call with the same idempotency key won the race.
         return Ok(sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE sender_id=$1 AND idem_key=$2")
@@ -352,6 +366,7 @@ pub async fn create_message(app: &AppInner, m: NewMessage<'_>) -> Result<Message
     let (sys, detail) = match stage {
         "held" => (format!("Held for the developer. It matched {}. The agent has not received it.", flags.join(", ")), "held"),
         "approved" if role == "owner" => ("Sent by the developer. Queued for the agent.".to_string(), "auto"),
+        "approved" if !auto => ("The developer approved this conversation. Queued for the agent without asking again.".to_string(), "followup"),
         "approved" => ("Auto relay is on. Queued for the agent without approval.".to_string(), "auto"),
         _ => ("Waiting for the developer's approval. The agent has not received it yet.".to_string(), "pending"),
     };
@@ -483,15 +498,25 @@ pub async fn decide(app: &AppInner, owner: &str, mid: &str, action: &str, edit: 
     // One statement, guarded by the stage: a concurrent decision cannot slip between the
     // check and the edit, and the agent never gets the original once an edit is stored.
     let (et, ee) = edit.as_ref().map(|(t, e)| (Some(t.as_str()), Some(e.as_str()))).unwrap_or((None, None));
+    // The conversation's row lock orders this against a follow-up being sent in it.
+    let mut tx = app.db.begin().await?;
+    sqlx::query("SELECT 1 FROM conversations WHERE id=$1 FOR UPDATE").bind(&m.conversation_id).execute(&mut *tx).await?;
     let done = sqlx::query("UPDATE messages SET stage=$2, expires_at=$3, delivery_id=CASE WHEN $2='approved' THEN '' ELSE delivery_id END, agent_idle=false,
             text=COALESCE($4, text), envelope=COALESCE($5, envelope), risk=COALESCE($7, risk), updated_at=now() WHERE id=$1 AND stage = ANY($6)")
         .bind(mid).bind(to).bind(expires).bind(et).bind(ee).bind(from)
         // The flags describe the text the agent gets. No second warning: the developer wrote the edit.
         .bind(et.map(|t| safety::risk_flags(t).join(",")))
-        .execute(&app.db).await?;
+        .execute(&mut *tx).await?;
     if done.rows_affected() == 0 {
         return Err(Fail::new(409, "the message changed meanwhile; reload and decide again"));
     }
+    // An approval opens the conversation for follow-ups; a rejection closes it again.
+    match action {
+        "approve" => sqlx::query("UPDATE conversations SET approved=true WHERE id=$1").bind(&m.conversation_id).execute(&mut *tx).await?,
+        "reject" => sqlx::query("UPDATE conversations SET approved=false WHERE id=$1").bind(&m.conversation_id).execute(&mut *tx).await?,
+        _ => Default::default(),
+    };
+    tx.commit().await?;
     if let Some((t, _)) = &edit {
         // The developer speaks in the thread: the tester's assistant sees who changed
         // their words and what the agent got instead.

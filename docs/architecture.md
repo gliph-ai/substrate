@@ -37,6 +37,7 @@ tester ─▶ their assistant (Claude, ChatGPT, any MCP client)
 (awaiting_sender) → completed`. The exit stages are `rejected | expired | cancelled |
 failed | interrupted | uncertain | held`.
 
+- A follow-up or an answer to the agent starts at `approved` when the developer approved the conversation (`conversations.approved`: set by an approval or a message from the developer, cleared by a rejection) and nothing in it still waits. Auto relay and trusted senders do not set it. The conversation row lock orders this check against decisions.
 - `held`: a risk flag matched. The message needs manual approval, also in auto relay.
 - `reviewing`: the developer sent the request to the agent review-only (`[SUBSTRATE REVIEW id]`, no deploy, no attachments) to go over it together. It holds the agent's queue. The agent's `substrate propose` stores `proposal` and `proposal_why` and puts it back to `pending_approval` (or `held`); every other report is refused. Approving the proposal delivers it as a normal message; the tester gets the developer's `edit` event with why. The relay types a review and the later real delivery of the same message both (0.1.15).
 - `uncertain`: the daemon stopped after it wrote the dispatch record and before Herdr confirmed the submit. Substrate does not retry it. The developer decides.

@@ -611,8 +611,22 @@ async fn question_round_trip_and_concurrent_projects() {
     assert_eq!(g["next_action"], "answer_question");
     assert_eq!(g["question"]["agent_text"], "Which browser are you on?");
     let ans = t.mcp(&w.pat, "reply", json!({"message_id": mid, "text": "Safari 18"})).await;
-    assert_eq!(ans["structuredContent"]["stage"], "pending_approval");
+    // The developer approved this conversation, so the answer goes on without asking again.
+    assert!(matches!(ans["structuredContent"]["stage"].as_str(), Some("approved" | "dispatched")));
     assert_eq!(t.stage(&mid).await, "answered");
+
+    // A conversation whose last decision was a rejection asks again.
+    let r = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "text": "make it purple"})).await;
+    let nid = r["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    let ncid: String = sqlx::query_scalar("SELECT conversation_id FROM messages WHERE id=$1").bind(&nid).fetch_one(&t.app.db).await.unwrap();
+    // While it waits, a follow-up waits too.
+    let f = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "conversation_id": ncid, "text": "and green"})).await;
+    assert_eq!(f["structuredContent"]["stage"], "pending_approval");
+    t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{nid}/reject"), json!({})).await;
+    let fid = f["structuredContent"]["message_id"].as_str().unwrap().to_string();
+    t.relay_api(&w.machine, "POST", &format!("/relay/api/messages/{fid}/reject"), json!({})).await;
+    let f = t.mcp(&w.pat, "send_message", json!({"project_id": w.pid, "conversation_id": ncid, "text": "please"})).await;
+    assert_eq!(f["structuredContent"]["stage"], "pending_approval");
 }
 
 #[tokio::test]
