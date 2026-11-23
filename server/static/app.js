@@ -411,6 +411,7 @@ document.addEventListener("submit", (e) => {
   }
 
   function fresh() {
+    root.classList.remove("side-open");
     S.gen++; S.cid = S.mid = null; S.seq = 0; S.next = ""; S.seen = new Set(); S.stageText = ""; S.deployText = ""; st.text = ""; dt.el = null;
     history.replaceState(null, "", location.pathname);
     const log = $("chat-log"), e = el("div", "chat-empty");
@@ -427,6 +428,7 @@ document.addEventListener("submit", (e) => {
   }
 
   async function open(cid) {
+    root.classList.remove("side-open");
     S.gen++; S.seen = new Set(); S.seq = 0; S.stageText = ""; S.deployText = ""; st.text = ""; dt.el = null; $("chat-log").replaceChildren();
     try {
       const c = await call("get_conversation", { conversation_id: cid });
@@ -478,6 +480,10 @@ document.addEventListener("submit", (e) => {
 
   $("chat-banner-x").onclick = () => notice(S.offlineText || "");
   $("chat-new").onclick = fresh;
+  // Phones: the sidebar is a drawer behind the menu button; a tap outside it closes it.
+  function drawer(open) { root.classList.toggle("side-open", open); $("chat-menu").setAttribute("aria-expanded", open); }
+  $("chat-menu").onclick = () => drawer(!root.classList.contains("side-open"));
+  root.addEventListener("click", (e) => { if (e.target === root) drawer(false); });
   const ta = $("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("chat-form").requestSubmit(); } });

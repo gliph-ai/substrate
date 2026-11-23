@@ -166,7 +166,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .list { background: var(--card); border-radius: var(--r); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .list a.item, .list div.item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 12px; border-radius: 14px; text-decoration: none; }
 .list a.item:hover { background: var(--card-2); color: var(--text); }
-.list .item .l { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.list .item .l { display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; min-width: 0; flex: 1 1 240px; }
 .list .item .r { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
 .list .label { padding: 10px 12px 6px; font-size: 13px; color: var(--muted); }
 .side-nav { background: var(--card); border-radius: var(--r); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
@@ -214,7 +214,28 @@ table.audit td { padding: 10px 8px; vertical-align: top; }
 table.audit tr:nth-child(odd) td { background: var(--card); }
 table.audit td:first-child { border-radius: 10px 0 0 10px; } table.audit td:last-child { border-radius: 0 10px 10px 0; }
 .scroll-x { overflow-x: auto; }
-@media (max-width: 640px) { .wrap, .narrow { padding: 0 16px; } .card { padding: 16px; } .stage { min-height: 520px; } }
+@media (max-width: 640px) {
+  .wrap, .narrow { padding: 0 16px; } .card { padding: 16px; } .stage { min-height: 520px; }
+  /* Header: wordmark and account on one row, the page links in a scrolling row below. */
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 0 4px; }
+  .top > .row:first-child { display: contents; }
+  .top .brand { grid-row: 1; justify-self: start; }
+  .top > .row:last-child { grid-row: 1; grid-column: 2; flex-wrap: nowrap; }
+  .top .links { grid-row: 2; grid-column: 1 / -1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 20px; padding: 6px 0 14px; white-space: nowrap; }
+  .top .links::-webkit-scrollbar { display: none; }
+  .links a.on::after { bottom: -7px; }
+  details.acct summary > span { display: none; }
+  details.acct .menu { max-width: calc(100vw - 32px); }
+  /* 16px stops iOS Safari zooming in on focus. */
+  input[type=email], input[type=text], input[type=number], select, textarea { font-size: 16px; }
+  /* Audit log: each entry is a small card instead of a clipped six-column row. */
+  table.audit, table.audit tbody, table.audit tr { display: block; }
+  table.audit tr { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 10px 12px; border-radius: 12px; }
+  table.audit tr:nth-child(odd) { background: var(--card); }
+  table.audit td { display: block; padding: 0; background: none !important; border-radius: 0 !important; }
+  table.audit td:empty { display: none; }
+  table.audit td:nth-child(n+4) { flex-basis: 100%; overflow-wrap: anywhere; }
+}
 
 /* project icons: the project's own logo (found by the relay), or a lettered tile */
 .picon { display: inline-flex; flex: none; border-radius: 22%; object-fit: cover; background: var(--card-2); }
@@ -306,17 +327,32 @@ html:has(.chat-body) { overflow: hidden; height: 100%; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; border-radius: 999px; background: var(--card-2); font-size: 13px; }
 .chip button { border: 0; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 .btn.icon { padding: 10px; }
+button.chat-menu { display: none; }
+/* Phones: the sidebar becomes a drawer over the chat, opened by the menu button. */
 @media (max-width: 760px) {
-  .chat-files { width: calc(100% - 32px); }
-  .chat-body { overflow: auto; height: auto; }
-  .chat { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .chat-side { max-height: 40dvh; }
-  .chat-main { height: 100dvh; }
-  .chat-top, .chat-log { padding-left: 16px; padding-right: 16px; }
-  .chat-top { flex-wrap: wrap; }
-  .chat-compose { width: calc(100% - 32px); }
-  .msg { max-width: 90%; }
+  .chat-files { width: calc(100% - 24px); }
+  .chat { grid-template-columns: minmax(0, 1fr); }
+  .chat-side { position: fixed; inset: 0 auto 0 0; z-index: 30; width: min(300px, 86vw); transform: translateX(-100%); transition: transform .2s ease; padding-top: max(18px, env(safe-area-inset-top)); }
+  .chat.side-open .chat-side { transform: none; box-shadow: 0 0 60px #000; }
+  .chat.side-open::after { content: ""; position: fixed; inset: 0; z-index: 25; background: #000a; }
+  button.chat-menu { display: inline-flex; flex: none; margin: -6px 0 0 -10px; }
+  .chat-top { flex-wrap: wrap; gap: 8px 10px; padding: 12px 12px 8px; padding-top: max(12px, env(safe-area-inset-top)); }
+  .chat-head { flex: 1 1 calc(100% - 56px); }
+  .chat-opts { flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+  /* Send is the icon alone here; the label stays for screen readers. */
+  #chat-send { padding: 10px 14px; }
+  #chat-send span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .chat-head .row { gap: 6px; font-size: 14px; }
+  .chat-log { padding-left: 12px; padding-right: 12px; }
+  .chat-compose { width: calc(100% - 24px); margin-bottom: max(12px, env(safe-area-inset-bottom)); }
+  /* 16px stops iOS Safari zooming in on focus. */
+  .chat-compose textarea { font-size: 16px; }
+  .msg { max-width: 88%; }
+  .msg.me { margin-left: 52px; }
+  .singer { left: -48px; width: 40px; height: 40px; }
+  .files .thumb img { max-width: 100%; }
 }
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) { .chat-side { transition: none; } }
 
 /* Avatars and the agent mark: the agent's own logo moves while it works. */
 .avatar-img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; background: var(--card-2); }
@@ -362,6 +398,8 @@ a.me { text-decoration: none; gap: 8px; }
 .ev-line { padding: 4px 12px; font-size: 13px; color: var(--text-2); }
 .ev-line .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .ev-line .who { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.ev-line .who:has(> .ev-text) { flex-wrap: nowrap; }
+.ev-line .ev-text { min-width: 0; }
 .ev-line .ev-av { width: 22px; height: 22px; }
 .ev-line .ev-av.mark img, .ev-line .ev-av.mark svg { width: 13px; height: 13px; }
 .ev-line .time { color: var(--faint); font-size: 12px; flex: none; }

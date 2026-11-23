@@ -39,7 +39,7 @@ fn shell(who: &str, rpc: &str, csrf: &str, back: bool) -> Markup {
                         div.chat-who.faint { (who) }
                     }
                     main.chat-main {
-                        header.chat-top { div.chat-head #chat-head {} div.chat-opts #chat-opts hidden {} }
+                        header.chat-top { button.btn.tertiary.icon.chat-menu #chat-menu type="button" aria-label="Projects and chats" aria-expanded="false" { (ic("menu")) } div.chat-head #chat-head {} div.chat-opts #chat-opts hidden {} }
                         div.chat-log #chat-log {
                             div.chat-empty { (orb("xl")) h2 { "Talk to the developer's agent." } p.muted { "Report a bug, ask a question or request a change. The developer sees every message." } }
                         }
