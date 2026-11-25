@@ -51,7 +51,7 @@ Each request that starts waiting (`pending_approval` or `held`), and each review
 category `substrate.approval`, `apns-collapse-id` `substrate.{message id}`, and `substrateMessage` and
 `substrateConnection` (the `client_ref`) beside `aps`. Tokens APNs refuses as unknown are dropped.
 
-Creating, editing and revoking sessions stay on the web: open `new_session_url` or a session's `web_url`.
+Creating and revoking sessions stay on the web: open `new_session_url` or a session's `web_url`. Change a session's projects and permissions with `PATCH /sessions/{id}`.
 
 ## Shapes
 
