@@ -267,6 +267,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
          WHERE l.id=$1 AND l.owner_id=$2 GROUP BY l.id",
     ).bind(&lid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such link"))?;
     let (acct, revoked): (String, bool) = sqlx::query_as("SELECT account_id, revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&app.db).await?;
+    let member_of: Vec<String> = sqlx::query_scalar("SELECT project_id FROM members WHERE account_id=$1").bind(&acct).fetch_all(&app.db).await?;
     let all: (bool, bool, bool) = sqlx::query_as("SELECT COALESCE(bool_and(trusted_auto), false), COALESCE(bool_and(can_deploy_test), false), COALESCE(bool_and(can_deploy_prod), false) FROM members WHERE account_id=$1")
         .bind(&acct).fetch_one(&app.db).await?;
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
@@ -318,16 +319,24 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
             @if live {
                 // A disclosure: app.js holds live refreshes while it is open, so unsaved ticks survive.
                 details.edit.card id="permissions" open[q.contains_key("edit")] {
-                    summary { "Change permissions" }
+                    summary { "Change projects and permissions" }
                     form.stack method="post" action=(format!("/sessions/{}/permissions", l.id)) style="margin-top:12px" {
                         (csrf(&a))
+                        div.field {
+                            label { "Projects" }
+                            @if let Some(msg) = q.get("error") { (crate::web::notice("warn", html! { (msg) })) }
+                            @for p in &projects {
+                                @let had = member_of.contains(&p.id);
+                                label.row style="font-weight:400" { input type="checkbox" name=(format!("p_{}", p.id)) checked[had]; (picon(&p.id, &p.name, &p.icon_etag, 22)) (p.name) span.muted.mono { (p.handle) } }
+                            }
+                        }
                         @let was = [l.can_read, l.can_deploys, l.can_files, l.auto, l.deploy_test, l.deploy_prod];
                         @let mixed = [false, false, false, l.auto && !all.0, l.deploy_test && !all.1, l.deploy_prod && !all.2];
                         // A box that differs between projects is a three-way choice instead; its default keeps each project's value.
                         @for ((k, v), m) in PERM_KEYS.iter().zip(was).zip(mixed) { input type="hidden" name=(format!("was_{k}")) value=(if m { "mixed" } else if v { "1" } else { "0" }); }
                         (perm_fields(was, mixed))
-                        span.faint style="font-size:13px" { "Only what you change is saved, in every project of this session. Trust and Test or Prod on a project page set one project." }
-                        div.row { button.btn.primary type="submit" { (ic("check")) "Save permissions" } }
+                        span.faint style="font-size:13px" { "Only what you change is saved, in every project of this session. An added project gets the permissions above; one set to \"as each project has it\" starts off there. Trust and Test or Prod on a project page set one project." }
+                        div.row { button.btn.primary type="submit" { (ic("check")) "Save" } }
                     }
                 }
             }
@@ -390,6 +399,54 @@ pub async fn create_post(State(app): State<App>, headers: HeaderMap, User(a): Us
     }
 }
 
+/// Change a live link: each (permission, on) in `changed` in every project, and,
+/// with `projects`, the projects it reaches. A permission not in `changed` keeps
+/// each project's value; an added project gets it where all projects agree, off
+/// where they differ. Shared by the web form and the app API. Ok(false): nothing changed.
+pub async fn update(app: &AppInner, owner: &str, lid: &str, changed: &[(&str, bool)], projects: Option<&[String]>) -> Result<bool, Fail> {
+    let mut tx = app.db.begin().await?;
+    let acc: Option<String> = sqlx::query_scalar("SELECT account_id FROM access_links WHERE id=$1 AND owner_id=$2 AND NOT revoked AND expires_at > now() FOR UPDATE").bind(lid).bind(owner).fetch_optional(&mut *tx).await?;
+    let Some(acc) = acc else { return Err(Fail::new(404, "no such session")) };
+    let current: Vec<String> = sqlx::query_scalar("SELECT project_id FROM members WHERE account_id=$1").bind(&acc).fetch_all(&mut *tx).await?;
+    let (added, removed): (Vec<&String>, Vec<&String>) = match projects {
+        Some([]) => return Err(Fail::new(400, "Keep at least one project, or revoke the session.")),
+        Some(t) => (t.iter().filter(|p| !current.contains(p)).collect(), current.iter().filter(|p| !t.contains(p)).collect()),
+        None => (vec![], vec![]),
+    };
+    if changed.is_empty() && added.is_empty() && removed.is_empty() {
+        return Ok(false);
+    }
+    let agreed: (bool, bool, bool) = sqlx::query_as("SELECT COALESCE(bool_and(trusted_auto), false), COALESCE(bool_and(can_deploy_test), false), COALESCE(bool_and(can_deploy_prod), false) FROM members WHERE account_id=$1")
+        .bind(&acc).fetch_one(&mut *tx).await?;
+    let pick = |k: &str, dflt: bool| changed.iter().find(|(c, _)| *c == k).map(|(_, on)| *on).unwrap_or(dflt);
+    for pid in &added {
+        let ok: Option<String> = sqlx::query_scalar("SELECT id FROM projects WHERE id=$1 AND owner_id=$2").bind(pid).bind(owner).fetch_optional(&mut *tx).await?;
+        if ok.is_none() {
+            return Err(Fail::new(404, "no such project"));
+        }
+        sqlx::query("INSERT INTO members (project_id, account_id, role, trusted_auto, invite_id, can_deploy_test, can_deploy_prod) VALUES ($1,$2,'tester',$3,$4,$5,$6) ON CONFLICT DO NOTHING")
+            .bind(pid).bind(&acc).bind(pick("auto", agreed.0)).bind(format!("link:{lid}")).bind(pick("deploy_test", agreed.1)).bind(pick("deploy_prod", agreed.2)).execute(&mut *tx).await?;
+    }
+    for pid in &removed {
+        sqlx::query("DELETE FROM members WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(pid).bind(&acc).execute(&mut *tx).await?;
+    }
+    for (k, on) in changed {
+        // Column names come from PERM_KEYS, never from the caller.
+        let (link_col, member_col) = match *k { "read" => (Some("can_read"), None), "deploys" => (Some("can_deploys"), None), "files" => (Some("can_files"), None),
+            "auto" => (Some("auto"), Some("trusted_auto")), "deploy_test" => (None, Some("can_deploy_test")), "deploy_prod" => (None, Some("can_deploy_prod")), _ => continue };
+        if let Some(c) = link_col { sqlx::query(&format!("UPDATE access_links SET {c}=$2 WHERE id=$1")).bind(lid).bind(on).execute(&mut *tx).await?; }
+        if let Some(c) = member_col { sqlx::query(&format!("UPDATE members SET {c}=$2 WHERE account_id=$1 AND role='tester'")).bind(&acc).bind(on).execute(&mut *tx).await?; }
+    }
+    // "No approval" on the link mirrors its projects, as after Trust on a project page.
+    sqlx::query("UPDATE access_links SET auto=COALESCE((SELECT bool_or(trusted_auto) FROM members WHERE account_id=$1), false) WHERE account_id=$1").bind(&acc).execute(&mut *tx).await?;
+    tx.commit().await?;
+    let mut what: Vec<String> = changed.iter().map(|(k, on)| format!("{k}={on}")).collect();
+    what.extend(added.iter().map(|p| format!("+{p}")).chain(removed.iter().map(|p| format!("-{p}"))));
+    audit(app, owner, "", "", "link.updated", lid, &what.join(",")).await;
+    app.changed(owner);
+    Ok(true)
+}
+
 /// POST /sessions/{lid}/permissions: change what a live link may do, in all its projects.
 pub async fn permissions_post(State(app): State<App>, headers: HeaderMap, User(a): User, Path(lid): Path<String>, Form(f): Form<HashMap<String, String>>) -> Result<Response, Fail> {
     check_csrf(&app, &headers, &a, f.get("csrf").map(String::as_str).unwrap_or(""))?;
@@ -402,23 +459,14 @@ pub async fn permissions_post(State(app): State<App>, headers: HeaderMap, User(a
             _ => Some((*k, on)),
         }
     }).collect();
-    if changed.is_empty() {
-        return Ok(Redirect::to(&format!("/sessions/{lid}?flash=Nothing+changed.")).into_response());
+    let target: Vec<String> = f.keys().filter_map(|k| k.strip_prefix("p_")).map(str::to_string).collect();
+    match update(&app, &a.id, &lid, &changed, Some(&target)).await {
+        Ok(false) => return Ok(Redirect::to(&format!("/sessions/{lid}?flash=Nothing+changed.")).into_response()),
+        Err(Fail(c, msg)) if c == axum::http::StatusCode::BAD_REQUEST => return Ok(Redirect::to(&format!("/sessions/{lid}?edit=1&error={}#permissions", urlencoding::encode(&msg))).into_response()),
+        Err(e) => return Err(e),
+        Ok(true) => {}
     }
-    let mut tx = app.db.begin().await?;
-    let acc: Option<String> = sqlx::query_scalar("SELECT account_id FROM access_links WHERE id=$1 AND owner_id=$2 AND NOT revoked AND expires_at > now()").bind(&lid).bind(&a.id).fetch_optional(&mut *tx).await?;
-    let Some(acc) = acc else { return Err(Fail::new(404, "no such link")) };
-    for (k, on) in &changed {
-        // Column names come from PERM_KEYS, never from the form.
-        let (link_col, member_col) = match *k { "read" => (Some("can_read"), None), "deploys" => (Some("can_deploys"), None), "files" => (Some("can_files"), None),
-            "auto" => (Some("auto"), Some("trusted_auto")), "deploy_test" => (None, Some("can_deploy_test")), _ => (None, Some("can_deploy_prod")) };
-        if let Some(c) = link_col { sqlx::query(&format!("UPDATE access_links SET {c}=$2 WHERE id=$1")).bind(&lid).bind(on).execute(&mut *tx).await?; }
-        if let Some(c) = member_col { sqlx::query(&format!("UPDATE members SET {c}=$2 WHERE account_id=$1 AND role='tester'")).bind(&acc).bind(on).execute(&mut *tx).await?; }
-    }
-    tx.commit().await?;
-    let what: Vec<String> = changed.iter().map(|(k, on)| format!("{k}={on}")).collect();
-    audit(&app, &a.id, "", "", "link.updated", &lid, &what.join(",")).await;
-    Ok(Redirect::to(&format!("/sessions/{lid}?flash=Permissions+saved.")).into_response())
+    Ok(Redirect::to(&format!("/sessions/{lid}?flash=Saved.")).into_response())
 }
 
 pub async fn revoke_post(State(app): State<App>, headers: HeaderMap, User(a): User, Path(lid): Path<String>, Form(f): Form<HashMap<String, String>>) -> Result<Response, Fail> {

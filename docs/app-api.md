@@ -25,7 +25,7 @@ The token lasts 180 days. Store it in the Keychain; keep the base URL and email 
 | `GET /dashboard` | `{"counts": {"waiting", "active", "agents", "working"}, "waiting": [Message], "active": [Message], "history": [Message], "new_session_url"}` |
 | `GET /conversations/{id}` | `{"id", "project", "deploy_stage", "messages": [Message], "events": [Event]}` (events newest first) |
 | `GET /sessions` | `{"sessions": [Session], "new_session_url"}` |
-| `GET /sessions/{id}` | Session plus `"counts": {"messages", "waiting", "active", "completed", "deployed"}` and `"history": [{"id", "title", "project", "deploy_stage", "events": [Event]}]` |
+| `GET /sessions/{id}` | Session plus `"counts": {"messages", "waiting", "active", "completed", "deployed"}`, `"history": [{"id", "title", "project", "deploy_stage", "events": [Event]}]` and `"available_projects": [Project]` (all of the developer's projects, to add) |
 | `GET /machines` | `{"machines": [{"id", "name", "platform", "relay_version", "online", "last_seen", "agents": [{"pane_id", "workspace", "agent", "status", "title", "project"}]}]}` |
 | `GET /live` | Server-sent events: `data: changed` whenever anything of this account changes. Refetch what is on screen. Keep-alive comments every ~15 s. |
 
@@ -37,6 +37,7 @@ The badge is `counts.waiting` from `/dashboard`, refetched on each `changed`.
 | --- | --- |
 | `POST /messages/{id}/approve` `[{"text", "why"}]` | `{"id", "stage": "approved"}`. With `text`, the agent gets that instead of the tester's text, and the tester sees it from the developer, with `why` when given. To approve a reviewed request, send its `proposal.text` and `proposal.why`. 400 when the text is empty or imitates Substrate's framing; 409 when the message moved on. |
 | `POST /messages/{id}/reject` | `{"id", "stage": "rejected"}` |
+| `PATCH /sessions/{id}` `{"permissions": {...}, "projects": [id]}` | The session, as `GET /sessions/{id}`. Each permission given (`replies`, `deploys`, `files`, `no_approval`, `deploy_test`, `deploy_production`) is set in every project of the session; one left out keeps each project's value. `projects`, when given, is the full list of project ids the session reaches (pick from `available_projects`); an added project gets the session's permissions, off where its projects differ. 400 for an empty `projects` list or an unknown permission; 404 when the session is revoked or expired. |
 | `POST /messages/{id}/review` | `{"id", "stage": "reviewing"}`. Sends the request to the project's agent, review only, so the developer can go over it with the agent in its session. The agent sends the agreed version back with `substrate propose`; the message then waits again, with `proposal` set. Call again to resend. 409 when the agent is offline or its relay is older than 0.1.15. |
 
 ## Push
@@ -69,7 +70,9 @@ blocked, done, needs_rebind, offline, unbound), `icon_url` (or null: draw a lett
 The project's `handle` and the machine agents' `pane_id` match Herdr: one project per pane.
 
 **Session**: `id`, `name`, `avatar_url`, `projects` [Project], `permissions` `{replies,
-deploys, files, no_approval, deploy_test, deploy_production}`, `waiting`, `last_used_at`,
+deploys, files, no_approval, deploy_test, deploy_production}` (the last three true when any project
+has them; each project in `projects` also has its own `permissions` `{no_approval, deploy_test,
+deploy_production}`, so a permission that differs between projects can show as mixed), `waiting`, `last_used_at`,
 `expires_at`, `active`, `web_url`.
 
 **Event**: `seq`, `time`, `actor` (human, system, relay, agent, deploy), `name`, `kind`,

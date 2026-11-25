@@ -1,7 +1,8 @@
 //! The app API (`/api/v1`): what Sidra's Substrate tab uses. A developer signs in
 //! with their email and a 6-digit code (no link to open on an iPad), gets a bearer
 //! token, and reads requests, sessions and machines, approves and rejects, and
-//! listens for changes. Creating or changing sessions stays on the web.
+//! listens for changes, and changes a session's projects and permissions. Creating a
+//! session stays on the web.
 
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap};
@@ -212,11 +213,16 @@ struct SessionRow {
 }
 
 async fn session_json(app: &AppInner, s: &SessionRow, projects: &[Project]) -> Result<Value, Fail> {
-    let rows: Vec<(String, bool, bool)> = sqlx::query_as("SELECT project_id, can_deploy_test, can_deploy_prod FROM members WHERE account_id=$1").bind(&s.account_id).fetch_all(&app.db).await?;
+    let rows: Vec<(String, bool, bool, bool)> = sqlx::query_as("SELECT project_id, can_deploy_test, can_deploy_prod, trusted_auto FROM members WHERE account_id=$1").bind(&s.account_id).fetch_all(&app.db).await?;
     let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held','reviewing')").bind(&s.account_id).fetch_one(&app.db).await?;
     Ok(json!({
         "id": s.id, "name": s.label, "avatar_url": format!("{}/accounts/{}/avatar", app.cfg.public_url, s.account_id),
-        "projects": rows.iter().filter_map(|r| projects.iter().find(|p| p.id == r.0)).map(|p| project_json(app, p)).collect::<Vec<_>>(),
+        // Each project carries its own values: a session permission set on a project page can differ per project.
+        "projects": rows.iter().filter_map(|r| projects.iter().find(|p| p.id == r.0).map(|p| (r, p))).map(|(r, p)| {
+            let mut v = project_json(app, p);
+            v["permissions"] = json!({"no_approval": r.3, "deploy_test": r.1, "deploy_production": r.2});
+            v
+        }).collect::<Vec<_>>(),
         "permissions": {"replies": s.can_read, "deploys": s.can_deploys, "files": s.can_files, "no_approval": s.auto,
             "deploy_test": rows.iter().any(|r| r.1), "deploy_production": rows.iter().any(|r| r.2)},
         "waiting": waiting, "last_used_at": s.last_used_at, "expires_at": s.expires_at,
@@ -265,7 +271,29 @@ pub async fn session(State(app): State<App>, headers: HeaderMap, Path(sid): Path
             "events": events_json(&app, &aid, &events, &msgs)}));
     }
     v["history"] = json!(history);
+    v["available_projects"] = json!(projects.iter().map(|p| project_json(&app, p)).collect::<Vec<_>>());
     Ok(Json(v))
+}
+
+/// PATCH /api/v1/sessions/{id} `{"permissions": {name: bool}, "projects": [project id]}`:
+/// each permission given is set in every project of the session; one left out keeps each
+/// project's value. `projects`, when given, is the full list the session reaches.
+pub async fn session_update(State(app): State<App>, headers: HeaderMap, Path(sid): Path<String>, Json(b): Json<Value>) -> Result<Json<Value>, Fail> {
+    let aid = bearer(&app, &headers).await?;
+    let mut changed = vec![];
+    if let Some(perms) = b.get("permissions").and_then(Value::as_object) {
+        for (name, v) in perms {
+            let key = match name.as_str() { "replies" => "read", "deploys" => "deploys", "files" => "files", "no_approval" => "auto",
+                "deploy_test" => "deploy_test", "deploy_production" => "deploy_prod", _ => return Err(Fail::new(400, "unknown permission")) };
+            changed.push((key, v.as_bool().ok_or_else(|| Fail::new(400, "a permission is true or false"))?));
+        }
+    }
+    let projects: Option<Vec<String>> = match b.get("projects") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|_| Fail::new(400, "projects is a list of project ids"))?),
+    };
+    crate::links::update(&app, &aid, &sid, &changed, projects.as_deref()).await?;
+    session(State(app), headers, Path(sid)).await
 }
 
 /// GET /api/v1/machines: each computer and its agents (read-only).

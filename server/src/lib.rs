@@ -141,7 +141,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/messages/{mid}/{action}", post(appapi::decide))
         .route("/api/v1/conversations/{cid}", get(appapi::conversation))
         .route("/api/v1/sessions", get(appapi::sessions))
-        .route("/api/v1/sessions/{sid}", get(appapi::session))
+        .route("/api/v1/sessions/{sid}", get(appapi::session).patch(appapi::session_update))
         .route("/api/v1/machines", get(appapi::machines))
         .route("/api/v1/live", get(appapi::live))
         .route("/api/v1/devices", post(appapi::device_add))

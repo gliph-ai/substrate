@@ -752,7 +752,8 @@ async fn access_link_scopes_projects_and_permissions() {
     assert_eq!(domain::message(&t.app, &mid).await.unwrap().deploy_allow, "test");
     // The producer widens the session on its page: production deploys open up, and only the owner may.
     assert_eq!(t.form(&w.tester, &format!("/sessions/{lid}/permissions"), &[("deploy_prod", "on")]).await.status(), 404);
-    let r = t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[("read", "on"), ("deploys", "on"), ("files", "on"), ("auto", "on"), ("deploy_test", "on"), ("deploy_prod", "on")]).await;
+    let (had, p1) = (format!("had_{}", w.pid), format!("p_{}", w.pid));
+    let r = t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[(had.as_str(), "1"), (p1.as_str(), "on"), ("read", "on"), ("deploys", "on"), ("files", "on"), ("auto", "on"), ("deploy_test", "on"), ("deploy_prod", "on")]).await;
     assert_eq!(r.status(), 303);
     let r = ask("production").await;
     assert_ne!(r["isError"], true, "{r}");
@@ -761,10 +762,22 @@ async fn access_link_scopes_projects_and_permissions() {
     let pid: String = sqlx::query_scalar("SELECT project_id FROM members WHERE account_id=$1").bind(&acc).fetch_one(&t.app.db).await.unwrap();
     t.form(&w.dev, &format!("/projects/{pid}/members/{acc}/trust"), &[("on", "0")]).await;
     assert!(!sqlx::query_scalar::<_, bool>("SELECT auto FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap());
-    let all = [("read", "on"), ("deploys", "on"), ("deploy_test", "on"), ("deploy_prod", "on"), ("was_read", "1"), ("was_deploys", "1"), ("was_files", "1"), ("was_auto", "0"), ("was_deploy_test", "1"), ("was_deploy_prod", "1")];
+    let all = [(had.as_str(), "1"), (p1.as_str(), "on"), ("read", "on"), ("deploys", "on"), ("deploy_test", "on"), ("deploy_prod", "on"), ("was_read", "1"), ("was_deploys", "1"), ("was_files", "1"), ("was_auto", "0"), ("was_deploy_test", "1"), ("was_deploy_prod", "1")];
     assert_eq!(t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &all).await.status(), 303);
     let (trusted, files): (bool, bool) = sqlx::query_as("SELECT m.trusted_auto, l.can_files FROM members m JOIN access_links l ON l.account_id=m.account_id WHERE l.id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
     assert!(!trusted && !files);
+    // Projects change on the same form: an added one gets the form's permissions; the last one cannot go.
+    let p2 = format!("p_{other}");
+    let r = t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[(had.as_str(), "1"), (p1.as_str(), "on"), (p2.as_str(), "on"), ("deploy_prod", "on"), ("was_deploy_prod", "1"), ("was_auto", "0")]).await;
+    assert_eq!(r.status(), 303);
+    let (prod, auto): (bool, bool) = sqlx::query_as("SELECT can_deploy_prod, trusted_auto FROM members WHERE project_id=$1 AND account_id=$2").bind(&other).bind(&acc).fetch_one(&t.app.db).await.unwrap();
+    assert!(prod && !auto);
+    let had2 = format!("had_{other}");
+    t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[(had.as_str(), "1"), (had2.as_str(), "1")]).await;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM members WHERE account_id=$1").bind(&acc).fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(n, 2, "the last project stays");
+    t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[(had.as_str(), "1"), (had2.as_str(), "1"), (p1.as_str(), "on")]).await;
+    assert!(domain::role(&t.app, &other, &acc).await.unwrap().is_none());
 
     // The producer sees the link's use; revoking it stops it at once.
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();
@@ -819,6 +832,17 @@ async fn app_api_code_sign_in_and_dashboard() {
     // Machines, sessions: read-only lists.
     assert_eq!(get(api("/machines")).await["machines"].as_array().unwrap().len(), 1);
     assert!(get(api("/sessions")).await["new_session_url"].as_str().unwrap().ends_with("/sessions/new"));
+    // A session's projects and permissions change from the app too.
+    let p = format!("p_{}", w.pid);
+    t.form(&w.dev, "/sessions", &[("label", "Umar"), (p.as_str(), "on"), ("days", "30")]).await;
+    let sid = get(api("/sessions")).await["sessions"][0]["id"].as_str().unwrap().to_string();
+    let patch = |b: Value| { let (http, tok, url) = (t.http.clone(), tok.clone(), api(&format!("/sessions/{sid}"))); async move { http.patch(url).bearer_auth(tok).json(&b).send().await.unwrap() } };
+    let s: Value = patch(json!({"permissions": {"no_approval": true, "deploy_production": true}})).await.json().await.unwrap();
+    assert_eq!(s["permissions"]["no_approval"], true, "{s}");
+    assert_eq!(s["projects"][0]["permissions"]["deploy_production"], true, "{s}");
+    assert_eq!(s["available_projects"].as_array().unwrap().len(), 1);
+    assert_eq!(patch(json!({"projects": []})).await.status(), 400);
+    assert_eq!(patch(json!({"permissions": {"root": true}})).await.status(), 400);
     // No token, or someone else's message: refused.
     assert_eq!(t.http.get(api("/dashboard")).send().await.unwrap().status(), 401);
     let other = t.http.post(api("/auth/logout")).bearer_auth(&tok).send().await.unwrap();
