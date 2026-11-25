@@ -750,6 +750,21 @@ async fn access_link_scopes_projects_and_permissions() {
     assert!(env.contains("Deploy to test") && env.contains("Never deploy it to production"), "{env}");
     // The relay's guard gets the allowance from the server, not from the prompt.
     assert_eq!(domain::message(&t.app, &mid).await.unwrap().deploy_allow, "test");
+    // The producer widens the session on its page: production deploys open up, and only the owner may.
+    assert_eq!(t.form(&w.tester, &format!("/sessions/{lid}/permissions"), &[("deploy_prod", "on")]).await.status(), 404);
+    let r = t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &[("read", "on"), ("deploys", "on"), ("files", "on"), ("auto", "on"), ("deploy_test", "on"), ("deploy_prod", "on")]).await;
+    assert_eq!(r.status(), 303);
+    let r = ask("production").await;
+    assert_ne!(r["isError"], true, "{r}");
+    // Untrusted on the project page, the session stays untrusted when the owner saves an unrelated change.
+    let acc: String = sqlx::query_scalar("SELECT account_id FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
+    let pid: String = sqlx::query_scalar("SELECT project_id FROM members WHERE account_id=$1").bind(&acc).fetch_one(&t.app.db).await.unwrap();
+    t.form(&w.dev, &format!("/projects/{pid}/members/{acc}/trust"), &[("on", "0")]).await;
+    assert!(!sqlx::query_scalar::<_, bool>("SELECT auto FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap());
+    let all = [("read", "on"), ("deploys", "on"), ("deploy_test", "on"), ("deploy_prod", "on"), ("was_read", "1"), ("was_deploys", "1"), ("was_files", "1"), ("was_auto", "0"), ("was_deploy_test", "1"), ("was_deploy_prod", "1")];
+    assert_eq!(t.form(&w.dev, &format!("/sessions/{lid}/permissions"), &all).await.status(), 303);
+    let (trusted, files): (bool, bool) = sqlx::query_as("SELECT m.trusted_auto, l.can_files FROM members m JOIN access_links l ON l.account_id=m.account_id WHERE l.id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
+    assert!(!trusted && !files);
 
     // The producer sees the link's use; revoking it stops it at once.
     let lid: String = sqlx::query_scalar("SELECT id FROM access_links WHERE owner_id=$1").bind(&w.dev.account).fetch_one(&t.app.db).await.unwrap();

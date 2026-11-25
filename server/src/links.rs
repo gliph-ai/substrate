@@ -199,6 +199,34 @@ pub async fn page(State(app): State<App>, User(a): User, axum::extract::Query(q)
     }).into_string()).into_response())
 }
 
+/// The permission checkboxes, in the order read, deploys, files, auto, deploy to test, deploy to production.
+const PERM_KEYS: [&str; 6] = ["read", "deploys", "files", "auto", "deploy_test", "deploy_prod"];
+
+/// `mixed` marks a box whose value differs between the session's projects.
+fn perm_fields(on: [bool; 6], mixed: [bool; 6]) -> maud::Markup {
+    let rows = [
+        ("read", "Read the agent's replies and questions"),
+        ("deploys", "See CI and deploy progress and retest links"),
+        ("files", "Attach files and download the agent's files"),
+        ("auto", "Skip my approval (flagged messages still wait)"),
+        ("deploy_test", "Ask the agent to deploy to test"),
+        ("deploy_prod", "Ask the agent to deploy to production"),
+    ];
+    html! {
+        div.field {
+            label { "Permissions" }
+            label.row style="font-weight:400" { input type="checkbox" checked disabled; "Send messages and answers" }
+            @for (((name, text), on), mixed) in rows.iter().zip(on).zip(mixed) {
+                @if mixed {
+                    label.row style="font-weight:400;flex-wrap:wrap" { (text) select name=(format!("mix_{name}")) style="width:auto" { option value="" selected { "as each project has it" } option value="on" { "on in every project" } option value="off" { "off in every project" } } }
+                } @else {
+                    label.row style="font-weight:400" { input type="checkbox" name=(name) checked[on]; (text) }
+                }
+            }
+        }
+    }
+}
+
 pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1 ORDER BY name").bind(&a.id).fetch_all(&app.db).await?;
     Ok(Html(layout("New session", Some(&a), None, html! {
@@ -218,16 +246,7 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
                             label.row style="font-weight:400" { input type="checkbox" name=(format!("p_{}", p.id)); (picon(&p.id, &p.name, &p.icon_etag, 22)) (p.name) span.muted.mono { (p.handle) } }
                         }
                     }
-                    div.field {
-                        label { "Permissions" }
-                        label.row style="font-weight:400" { input type="checkbox" checked disabled; "Send messages and answers" }
-                        label.row style="font-weight:400" { input type="checkbox" name="read" checked; "Read the agent's replies and questions" }
-                        label.row style="font-weight:400" { input type="checkbox" name="deploys" checked; "See CI and deploy progress and retest links" }
-                        label.row style="font-weight:400" { input type="checkbox" name="files" checked; "Attach files and download the agent's files" }
-                        label.row style="font-weight:400" { input type="checkbox" name="auto"; "Skip my approval (flagged messages still wait)" }
-                        label.row style="font-weight:400" { input type="checkbox" name="deploy_test"; "Ask the agent to deploy to test" }
-                        label.row style="font-weight:400" { input type="checkbox" name="deploy_prod"; "Ask the agent to deploy to production" }
-                    }
+                    (perm_fields([true, true, true, false, false, false], [false; 6]))
                     div.field { label for="ld" { "Expires" } select id="ld" name="days" { option value="7" { "in 7 days" } option value="30" selected { "in 30 days" } option value="90" { "in 90 days" } option value="365" { "in a year" } } }
                     div.row { button.btn.primary type="submit" { (ic("link")) "Create link" } a.btn.tertiary href="/sessions" { "Cancel" } }
                 }
@@ -238,7 +257,7 @@ pub async fn new_page(State(app): State<App>, User(a): User, axum::extract::Quer
 
 /// GET /sessions/{lid}: one session: what it reaches and may do, what waits for
 /// approval, and everything its holder sent and got back.
-pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<String>) -> Result<Response, Fail> {
+pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<String>, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> Result<Response, Fail> {
     let l = sqlx::query_as::<_, LinkRow>(
         "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files, l.auto, l.expires_at, l.last_used_at,
                 (SELECT count(*) FROM messages mm WHERE mm.sender_id=l.account_id AND mm.stage IN ('pending_approval','held','reviewing')) AS waiting,
@@ -248,6 +267,8 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
          WHERE l.id=$1 AND l.owner_id=$2 GROUP BY l.id",
     ).bind(&lid).bind(&a.id).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such link"))?;
     let (acct, revoked): (String, bool) = sqlx::query_as("SELECT account_id, revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&app.db).await?;
+    let all: (bool, bool, bool) = sqlx::query_as("SELECT COALESCE(bool_and(trusted_auto), false), COALESCE(bool_and(can_deploy_test), false), COALESCE(bool_and(can_deploy_prod), false) FROM members WHERE account_id=$1")
+        .bind(&acct).fetch_one(&app.db).await?;
     let projects = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE owner_id=$1").bind(&a.id).fetch_all(&app.db).await?;
     let waiting = sqlx::query_as::<_, crate::domain::Message>("SELECT * FROM messages WHERE sender_id=$1 AND stage IN ('pending_approval','held','reviewing') ORDER BY order_n")
         .bind(&acct).fetch_all(&app.db).await?;
@@ -272,6 +293,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
     ).bind(&acct).fetch_one(&app.db).await?;
     Ok(Html(layout("Sessions", Some(&a), Some("/live".into()), html! {
         div.stack style="padding:12px 0 48px" {
+            @if let Some(msg) = q.get("flash") { (crate::web::notice("ok", html! { (msg) })) }
             div.crumbs { a href="/sessions" style="text-decoration:none" { "Sessions" } span.sep { "/" } span.muted { (l.label) } }
             div.between {
                 div.row style="gap:14px" { img.avatar-img src=(format!("/accounts/{acct}/avatar")) alt="" style="width:44px;height:44px"; h1 style="margin:0" { (l.label) } }
@@ -292,6 +314,22 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
                     @if l.auto { span.tag.warn { "no approval" } }
                 }
                 span.faint style="font-size:13px" { @match l.last_used_at { Some(t) => { "Used " (crate::web::ago_text(&t)) }, None => { "Not used yet" } } ", expires " (l.expires_at.format("%b %d")) }
+            }
+            @if live {
+                // A disclosure: app.js holds live refreshes while it is open, so unsaved ticks survive.
+                details.edit.card id="permissions" open[q.contains_key("edit")] {
+                    summary { "Change permissions" }
+                    form.stack method="post" action=(format!("/sessions/{}/permissions", l.id)) style="margin-top:12px" {
+                        (csrf(&a))
+                        @let was = [l.can_read, l.can_deploys, l.can_files, l.auto, l.deploy_test, l.deploy_prod];
+                        @let mixed = [false, false, false, l.auto && !all.0, l.deploy_test && !all.1, l.deploy_prod && !all.2];
+                        // A box that differs between projects is a three-way choice instead; its default keeps each project's value.
+                        @for ((k, v), m) in PERM_KEYS.iter().zip(was).zip(mixed) { input type="hidden" name=(format!("was_{k}")) value=(if m { "mixed" } else if v { "1" } else { "0" }); }
+                        (perm_fields(was, mixed))
+                        span.faint style="font-size:13px" { "Only what you change is saved, in every project of this session. Trust and Test or Prod on a project page set one project." }
+                        div.row { button.btn.primary type="submit" { (ic("check")) "Save permissions" } }
+                    }
+                }
             }
             div.grid.tight {
                 div.card.stat { span.k { (ic("message")) "Messages" } span.big { (sent) } }
@@ -350,6 +388,37 @@ pub async fn create_post(State(app): State<App>, headers: HeaderMap, User(a): Us
         Ok((_, secret)) => Ok(created(&app, &a, label.trim(), &secret)),
         Err(Fail(_, msg)) => Ok(Redirect::to(&format!("/sessions/new?flash={}", urlencoding::encode(&msg))).into_response()),
     }
+}
+
+/// POST /sessions/{lid}/permissions: change what a live link may do, in all its projects.
+pub async fn permissions_post(State(app): State<App>, headers: HeaderMap, User(a): User, Path(lid): Path<String>, Form(f): Form<HashMap<String, String>>) -> Result<Response, Fail> {
+    check_csrf(&app, &headers, &a, f.get("csrf").map(String::as_str).unwrap_or(""))?;
+    // Only the boxes the owner changed: an unchanged box keeps each project's own Trust, Test and Prod.
+    let changed: Vec<(&str, bool)> = PERM_KEYS.iter().filter_map(|k| {
+        let on = f.contains_key(*k);
+        match f.get(&format!("was_{k}")).map(String::as_str) {
+            Some("mixed") => match f.get(&format!("mix_{k}")).map(String::as_str) { Some("on") => Some((*k, true)), Some("off") => Some((*k, false)), _ => None },
+            Some(w) if (w == "1") == on => None,
+            _ => Some((*k, on)),
+        }
+    }).collect();
+    if changed.is_empty() {
+        return Ok(Redirect::to(&format!("/sessions/{lid}?flash=Nothing+changed.")).into_response());
+    }
+    let mut tx = app.db.begin().await?;
+    let acc: Option<String> = sqlx::query_scalar("SELECT account_id FROM access_links WHERE id=$1 AND owner_id=$2 AND NOT revoked AND expires_at > now()").bind(&lid).bind(&a.id).fetch_optional(&mut *tx).await?;
+    let Some(acc) = acc else { return Err(Fail::new(404, "no such link")) };
+    for (k, on) in &changed {
+        // Column names come from PERM_KEYS, never from the form.
+        let (link_col, member_col) = match *k { "read" => (Some("can_read"), None), "deploys" => (Some("can_deploys"), None), "files" => (Some("can_files"), None),
+            "auto" => (Some("auto"), Some("trusted_auto")), "deploy_test" => (None, Some("can_deploy_test")), _ => (None, Some("can_deploy_prod")) };
+        if let Some(c) = link_col { sqlx::query(&format!("UPDATE access_links SET {c}=$2 WHERE id=$1")).bind(&lid).bind(on).execute(&mut *tx).await?; }
+        if let Some(c) = member_col { sqlx::query(&format!("UPDATE members SET {c}=$2 WHERE account_id=$1 AND role='tester'")).bind(&acc).bind(on).execute(&mut *tx).await?; }
+    }
+    tx.commit().await?;
+    let what: Vec<String> = changed.iter().map(|(k, on)| format!("{k}={on}")).collect();
+    audit(&app, &a.id, "", "", "link.updated", &lid, &what.join(",")).await;
+    Ok(Redirect::to(&format!("/sessions/{lid}?flash=Permissions+saved.")).into_response())
 }
 
 pub async fn revoke_post(State(app): State<App>, headers: HeaderMap, User(a): User, Path(lid): Path<String>, Form(f): Form<HashMap<String, String>>) -> Result<Response, Fail> {

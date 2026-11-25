@@ -159,6 +159,7 @@ pub fn router(app: App) -> Router {
         .route("/sessions/new", get(links::new_page))
         .route("/sessions/{lid}", get(links::detail))
         .route("/sessions/{lid}/revoke", post(links::revoke_post))
+        .route("/sessions/{lid}/permissions", post(links::permissions_post))
         .route("/.well-known/oauth-protected-resource", get(oauth::protected_resource))
         .route("/.well-known/oauth-protected-resource/mcp", get(oauth::protected_resource))
         .route("/.well-known/oauth-authorization-server", get(oauth::auth_server))

@@ -750,7 +750,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
                             div.stack {
                                 @for (aid, email, name, role, trusted, dtest, dprod) in &members {
                                     div.between {
-                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if email.ends_with("@links.substrate.invalid") { a href="/sessions" { "session" } } @else { (role) } @if *trusted { ", may auto relay" } } } }
+                                        span.row { span.avatar style=(if *trusted { "box-shadow:0 0 0 2px var(--teal)" } else { "" }) { (initials(if name.is_empty() { email } else { name })) } span { (if name.is_empty() { email.as_str() } else { name.as_str() }) br; span.faint style="font-size:12px" { @if let Some(lid) = email.strip_suffix("@links.substrate.invalid") { a href=(format!("/sessions/{lid}")) { "session settings" } } @else { (role) } @if *trusted { ", may auto relay" } } } }
                                         @if role != "owner" {
                                             div.row {
                                                 form.inline method="post" action=(format!("/projects/{pid}/members/{aid}/trust")) { (csrf(&a)) input type="hidden" name="on" value=(if *trusted { "0" } else { "1" }); button.btn.small type="submit" { (ic("shield")) @if *trusted { "Untrust" } @else { "Trust" } } }
@@ -927,6 +927,8 @@ pub async fn member_trust(State(app): State<App>, headers: HeaderMap, User(a): U
     domain::require_owner(&app, &pid, &a.id).await?;
     let on = f.on == "1";
     sqlx::query("UPDATE members SET trusted_auto=$3 WHERE project_id=$1 AND account_id=$2 AND role='tester'").bind(&pid).bind(&aid).bind(on).execute(&app.db).await?;
+    // A session's "no approval" mirrors its projects: on while any of them trusts it.
+    sqlx::query("UPDATE access_links SET auto=(SELECT bool_or(trusted_auto) FROM members WHERE account_id=$1) WHERE account_id=$1").bind(&aid).execute(&app.db).await?;
     audit(&app, &a.id, &pid, &a.label(), if on { "member.trusted" } else { "member.untrusted" }, &aid, "").await;
     Ok(Redirect::to(&format!("/projects/{pid}")).into_response())
 }
