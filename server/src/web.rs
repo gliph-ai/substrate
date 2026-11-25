@@ -526,7 +526,7 @@ fn request_row(m: &Message, projects: &[Project]) -> Markup {
                         @if let Some(p) = p { span.faint { "to" } (picon(&p.id, &p.name, &p.icon_etag, 16)) span.muted { (p.name) } }
                         span.faint { (ago_text(&m.updated_at)) }
                     }
-                    span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62ch" { (truncate(&m.text, 110)) }
+                    span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:min(62ch,100%)" { (truncate(&m.text, 110)) }
                 }
             }
             span.r.row {
