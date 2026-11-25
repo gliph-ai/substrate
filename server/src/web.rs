@@ -1309,7 +1309,7 @@ pub fn approvals_section(a: &Account, rows: &[Message], projects: &[Project], ba
                             (review_part(m))
                             @if m.stage != "reviewing" { (edit_form(a, &format!("/approvals/{}/approve", m.id), m, back)) }
                         }
-                        div.row style="flex:none;align-self:flex-start" {
+                        div.row style="align-self:flex-start;max-width:100%" {
                             @if m.stage != "reviewing" { form.inline method="post" action=(format!("/approvals/{}/approve", m.id)) data-confirm=[risk_confirm(m, false)] { (csrf(a)) input type="hidden" name="back" value=(back); (proposal_fields(m)) button.btn.primary.small type="submit" { (ic("check")) (approve_label(m)) } } }
                             form.inline method="post" action=(format!("/approvals/{}/reject", m.id)) { (csrf(a)) input type="hidden" name="back" value=(back); button.btn.small.tertiary type="submit" { (ic("x")) "Reject" } }
                             (review_button(a, &format!("/approvals/{}/review", m.id), m, back))

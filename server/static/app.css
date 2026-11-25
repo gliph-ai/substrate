@@ -209,7 +209,11 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .secret { font-family: var(--mono); background: #000; border-radius: 10px; padding: 12px 14px; overflow-wrap: anywhere; }
 footer.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding: 32px 0 48px; font-size: 13px; color: var(--faint); }
 details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-details.edit.card > summary { color: var(--text); font-size: 15px; font-weight: 500; }
+details.edit.card > summary { color: var(--text); font-size: 15px; font-weight: 500; list-style: none; display: flex; align-items: center; gap: 10px; }
+details.edit.card > summary::-webkit-details-marker { display: none; }
+details.edit.card > summary > svg { color: var(--teal); }
+details.edit.card > summary .chev { margin-left: auto; display: flex; color: var(--faint); transition: transform .15s; }
+details.edit.card[open] > summary .chev { transform: rotate(180deg); }
 table.audit { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.audit td { padding: 10px 8px; vertical-align: top; }
 table.audit tr:nth-child(odd) td { background: var(--card); }

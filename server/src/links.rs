@@ -319,7 +319,7 @@ pub async fn detail(State(app): State<App>, User(a): User, Path(lid): Path<Strin
             @if live {
                 // A disclosure: app.js holds live refreshes while it is open, so unsaved ticks survive.
                 details.edit.card id="permissions" open[q.contains_key("edit")] {
-                    summary { "Change projects and permissions" }
+                    summary { (ic("shield")) span { "Change projects and permissions" } span.chev { (ic("chevron-down")) } }
                     form.stack method="post" action=(format!("/sessions/{}/permissions", l.id)) style="margin-top:12px" {
                         (csrf(&a))
                         div.field {
