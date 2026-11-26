@@ -103,7 +103,7 @@ The relay then does these steps for each turn:
 
 1. It masks secrets in the prompt, the reply, the diffs and the tool log.
 2. It uploads the prompt, the final reply, the tokens, the time, the tools, the changed file names and the attachment names.
-3. It keeps the tool log, the diffs and the images on this Mac. The cloud asks the relay for them only when you open the turn, and only while this Mac is online.
+3. The tool log, the diffs and the images stay on this Mac. The cloud requests them from the relay when you open the turn, while this Mac is online.
 4. It writes the summary on this Mac with the CLI of the agent that did the turn: `claude -p` with Haiku, or `codex exec` with your default Codex model. Then it uploads the summary. A failed summary is tried again after 30 seconds and 2 minutes.
 
 Turns are grouped by git repository: the normalised `origin` remote, or else the main worktree folder.

@@ -203,6 +203,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .notice .nb { flex: 1; min-width: 0; }
 .ni { flex: none; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--amber); color: #111; }
 .ni svg { width: 15px; height: 15px; }
+.ni.plain { background: var(--card-2); color: var(--text); box-shadow: 0 0 0 1px var(--ring); }
 .notice.ok .ni { background: var(--teal); }
 .notice.bad .ni { background: var(--red); }
 .card.attention h3.row, .card.attention .row { gap: 10px; }

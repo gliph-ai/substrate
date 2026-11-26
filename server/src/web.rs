@@ -342,6 +342,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             } @else {
                                 nav.links aria-label="Main" {
                                     a href="/#how" { "How it works" }
+                                    a href="/#log" { "Work log" }
                                     a href="/#connect" { "Connect an assistant" }
                                     a href="/#cli" { "CLI" }
                                     a href="/#security" { "Security" }
@@ -400,7 +401,7 @@ fn landing() -> Html<String> {
     Html(layout("Let testers talk to your coding agent", None, None, html! {
         section style="padding:56px 0 28px" class="stack" {
             h1.hero { "Let testers talk to " br; span.grad { "your coding agent." } }
-            p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant." }
+            p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant. You also get a summary of every turn your agents run." }
             div.between style="padding-top:8px" {
                 div.row {
                     a.btn.primary href="/login" { (ic("terminal")) "Console" }
@@ -444,6 +445,22 @@ fn landing() -> Html<String> {
                 div.card { span.mono style="color:#C79BFF;font-size:12px" { "04" } h3 { "Testers hear back" } span.muted { "They get progress, questions, notes from you about the work, and CI and deploy updates, then a note when the fix is ready to retest." } }
             }
         }
+        section id="log" class="stack" style="padding:56px 0 16px" {
+            h2 { "A summary of every agent turn" }
+            p.muted { "Hooks in Claude Code and Codex record each finished turn. The relay runs your own agent CLI on your Mac to write the summary." }
+            div.grid {
+                div.card { span.ni.plain { (ic("list")) } h3 { "Steps and results" } span.muted { "Each turn gets a headline, its steps with the time of each, and the test results of the turn." } }
+                div.card { span.ni.plain { (ic("alert")) } h3 { "Decisions and open items" } span.muted { "Each decision comes with its reason, and with the other option when the agent named one. Tick off an open item when you fix it." } }
+                div.card { span.ni.plain { (ic("activity")) } h3 { "Tokens and cost" } span.muted { "See the tokens, the time and the cost at API list prices for each turn, day and project." } }
+                div.card { span.ni.plain { (ic("shield")) } h3 { "Diffs stay on your Mac" } span.muted { "Diffs, images and the tool log stay on your Mac. A turn page loads them from the relay when you open it." } }
+            }
+        }
+        section id="agents" class="stack" style="padding:40px 0 16px" {
+            h2 { "Answer your agents from your phone" }
+            div.card {
+                span.muted { "When an agent stops with a question, you see the question and its choices on the web and in Sidra. Pick a choice or type your own answer. The relay types it into the agent's pane. Your audit log records each answer you send, with the time and the agent." }
+            }
+        }
         section id="cli" class="grid" style="padding:40px 0;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" {
             div.card {
                 h3 { "Give a tester access" }
@@ -452,7 +469,7 @@ fn landing() -> Html<String> {
             }
             div.card {
                 h3.row { "Install the relay" span.tag { "macOS" } }
-                (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate daemon install"]))
+                (cmd(&["curl -fsSL https://substrate.gliph.sh/install | sh", "substrate login", "substrate daemon install", "substrate log install"])) span.muted style="font-size:13px" { "In Codex, approve the new hook once under " code { "/hooks" } "." }
             }
         }
     }).into_string())
@@ -579,7 +596,7 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
                 div.card {
                     h3 { "Set up your first project" }
                     p.muted { "Install the relay on the Mac where your agents run. Each agent in Herdr gets a project." }
-                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate daemon install"]))
+                    (cmd(&[&format!("curl -fsSL {}/install | sh", app.cfg.public_url), "substrate login", "substrate daemon install", "substrate log install"])) span.muted style="font-size:13px" { "In Codex, approve the new hook once under " code { "/hooks" } "." }
                 }
             }
             @if !approvals.is_empty() {

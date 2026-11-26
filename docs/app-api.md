@@ -86,11 +86,11 @@ deploy_failed), Live (verified, ready_to_retest).
 ## Work log (`/api/v1/log`)
 
 The turns of Claude Code and Codex on your Macs, ported from Theasa. The shapes follow Theasa's API, so a screen
-built for it reads these. A **project** here is a git repo (`log_repos`), not a Herdr pane; ids are integers.
+built for it reads these. A **project** in the work log is a git repo (`log_repos`), and its id is an integer. Substrate's own projects are Herdr panes.
 Ranges are `range=today|week|month|all` (default week). Days and hours are the reader's: send `tz`, the minutes
 east of UTC (`-getTimezoneOffset()`). Each write ends with a `changed` on `/live`.
 
-The cloud keeps no diffs, images or tool log. A turn's `local` comes from the relay on the Mac that recorded it
+The cloud stores no diffs, images or tool log. A turn's `local` comes from the relay on the Mac that recorded it
 (`machine_id`); when that Mac is offline or its relay is older than 0.1.17, `local` is null and `local_error` says why.
 
 | Call | Answer |
@@ -102,7 +102,7 @@ The cloud keeps no diffs, images or tool log. A turn's `local` comes from the re
 | `PATCH /log/repos/{id}` `{name?, hidden?, icon_reset?}` | `{"ok": true}`. `name` "" goes back to the repo name; `icon_reset` lets the relay's logo replace an uploaded one. |
 | `POST /log/repos/{id}/icon` | multipart field `icon` (PNG, JPEG or WebP, under 1 MB); kept until `icon_reset` |
 | `GET /log/turns/{id}` | `{turn: Turn + {final_text, diffs: {path: text}}, attachments: [{id, dir, kind, name, url, media_type, count, image?, has_data, src}], project, decisions, watch, job: {status, model, tokens, cost, finished_at, error}, session: {index, count, first_at}, prev, next, resume, local: {log, diffs, images} \| null, local_error}` |
-| `GET /log/turns/{id}/images/{n}` | the image bytes (raster only), from the relay. Send the bearer token, as for every call: load it as data, not as a plain image URL |
+| `GET /log/turns/{id}/images/{n}` | the image bytes (raster only), from the relay. Send the bearer token, as for every call. Load it as data with the token; a plain image URL gets a 401. |
 | `POST /log/turns/{id}/resummarize` | `{"ok": true}`: the recording Mac writes the summary again. 409/504 when it is offline or too old. |
 | `POST /log/watch/{id}/done\|open` | `{"ok": true}` |
 | `POST /log/decisions/{id}/dismiss\|restore\|supersede` `{by?}` | `{"ok": true}`; `supersede` needs `by`, the id of the newer decision |

@@ -4,6 +4,8 @@ Give your testers a direct line to the agents that build your software.
 
 A tester tells their own AI assistant (Claude, ChatGPT or any MCP client) about a bug. The message waits in Substrate until you approve it. Your relay then sends it to the Claude Code, Codex, Gemini or Cursor session that you have open in [Herdr]. The agent's progress, questions, CI state and deploy state go back to the tester's assistant. The tester learns when the fix is ready to retest.
 
+Substrate also has a work log. Hooks in Claude Code and Codex record each finished turn. The relay writes the summary on your Mac with your own agent CLI. The log shows the steps, the decisions, the open items, the tokens and the cost of each turn, per git repo. Diffs, images and the tool log stay on your Mac. When an agent stops with a question, you answer it on the web or in Sidra.
+
 Substrate is live at **https://substrate.gliph.sh** and is part of [Gliph](https://gliph.sh). You sign in with your Gliph account. In a Gliph channel, `/substrate` makes the channel an agent channel.
 
 [Herdr]: https://herdr.dev
@@ -13,8 +15,8 @@ Substrate is live at **https://substrate.gliph.sh** and is part of [Gliph](https
 | Path | Contents |
 |---|---|
 | `proto/` | The wire contract for the cloud and the relay: relay frames, stages, the sanitizer and the prompt envelope. |
-| `server/` | The cloud, on axum and PostgreSQL: the website, magic-link and Gliph sign-in, MCP and OAuth 2.1, approvals, the relay hub and the Gliph plugin. |
-| `cli/` | `substrate`, the relay and CLI in Rust: device pairing, the launchd daemon, the Herdr adapter, deploy tracking and agent reports. |
+| `server/` | The cloud, on axum and PostgreSQL: the website, magic-link and Gliph sign-in, MCP and OAuth 2.1, approvals, the work log, live agents, the relay hub and the Gliph plugin. |
+| `cli/` | `substrate`, the relay and CLI in Rust: device pairing, the launchd daemon, the Herdr adapter, deploy tracking, agent reports, and the work log hooks and summaries. |
 | `docs/` | Architecture, security, the CLI, onboarding, operations and limitations. |
 
 ## Develop

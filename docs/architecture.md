@@ -158,7 +158,7 @@ The cloud gets no GitHub, GitLab or Pushleft credentials.
 ## Work log and live agents (0.1.17)
 
 Ported from Theasa, which this replaces. The relay's Stop hooks (Claude Code and Codex) read each finished turn from the
-agent's transcript on the Mac and upload it, grouped by git repo (`log_repos`; not a Herdr pane, so it outlives the pane):
+agent's transcript on the Mac and upload it, grouped by git repo (`log_repos`). A repo lasts longer than its Herdr panes:
 
 | Call (machine bearer) | Body | Answer |
 |---|---|---|
@@ -166,8 +166,8 @@ agent's transcript on the Mac and upload it, grouped by git repo (`log_repos`; n
 | `POST /relay/log/summary` | `proto::LogSummaryReport` | `{"ok": true}`. `queued`, `running`, `failed`, or `done` with the summary. A redo keeps the state of an identical watch item or decision. |
 | `POST /relay/log/icon` | `{"key","mime","data"}` (base64, PNG, JPEG or WebP, 1 MB) | `{"updated"}`; never over an icon the developer uploaded |
 
-What stays on the Mac: the raw tool log, the diffs and the images. The cloud asks the recording Mac's relay for them
-(`request` `turn_local`, `turn_image`) when the developer opens a turn, and shows nothing of them when that Mac is offline.
+What stays on the Mac: the raw tool log, the diffs and the images. The cloud requests them from the relay of the recording Mac
+(`request` `turn_local`, `turn_image`) when the developer opens a turn. When that Mac is offline, the turn page shows that they are not available.
 The summary is written on the Mac too, with the agent's own CLI. The cloud prices each turn from LiteLLM's public price table (loaded at boot and daily).
 
 Live agents: the owner can answer a blocked agent from the web or Sidra. `agent_keys` sends dialog keys only (`proto::AGENT_KEYS`);
