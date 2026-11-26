@@ -15,7 +15,7 @@ Substrate is live at **https://substrate.gliph.sh** and is part of [Gliph](https
 You need a Mac with [Herdr] and at least one agent CLI (`claude`, `codex`, `gemini` or `cursor-agent`). The work log summaries use `claude` or `codex`. Deploy tracking uses `gh`.
 
 1. Sign in at https://substrate.gliph.sh.
-2. Install the relay. The installer puts the binary in `~/.local/bin` and does not use root. Add that folder to your `PATH` if it is not there.
+2. Install the relay. The installer puts the binary in `~/.local/bin` and does not use root. Add that folder to your `PATH`.
    ```sh
    curl -fsSL https://substrate.gliph.sh/install | sh
    export PATH="$HOME/.local/bin:$PATH"   # also in ~/.zshrc
@@ -52,7 +52,7 @@ Each agent pane in Herdr becomes a project. Invite testers from the project page
 | `substrate log status` | Shows the work log hooks, the upload queue and the summaries that wait or failed. |
 | `substrate logout` | Signs this Mac out and stops the relay. |
 
-The [CLI reference](docs/cli.md) has every command and the files the relay keeps.
+The [CLI reference](docs/cli.md) has every command and the relay's files.
 
 ## Develop
 
@@ -68,7 +68,7 @@ The [CLI reference](docs/cli.md) has every command and the files the relay keeps
 bin/dev
 ```
 
-`bin/dev` creates the database `substrate_dev`, runs the migrations at boot and serves https://substrate.test (Caddy to port 8790). Magic links go to the server log, not to mail. Files go to `./data`.
+`bin/dev` creates the database `substrate_dev`, runs the migrations at boot and serves https://substrate.test (Caddy to port 8790). Magic links go to the server log. Files go to `./data`.
 
 Without Caddy, use the plain port:
 
@@ -112,13 +112,13 @@ Each end-to-end test creates a new database on `SUBSTRATE_TEST_PG` (default `pos
 | `S3_ENDPOINT`, `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The attachment and release bucket. |
 | `SES_KEY_ID`, `SES_SECRET`, `SES_REGION`, `MAIL_FROM` | Magic-link mail through Amazon SES. |
 | `GLIPH_URL`, `GLIPH_PLUGIN_TOKEN` | Gliph sign-in and the `/substrate` channel plugin. |
-| `APNS_KEY_PATH` (default `/secrets/apns.p8`, where Pushleft mounts the `APNS_KEY_P8` secret), `APNS_KEY_ID`, `APNS_TEAM_ID` | Approval push notifications to Sidra. Without them, no push is sent. |
-| `PUSHLEFT_ADMIN_JWKS`, `PUSHLEFT_ADMIN_AUDIENCE` | The Pushleft Admin page. Pushleft sets them. Without them, `/_pushleft/admin` answers 404. |
+| `APNS_KEY_PATH` (default `/secrets/apns.p8`, where Pushleft mounts the `APNS_KEY_P8` secret), `APNS_KEY_ID`, `APNS_TEAM_ID` | Approval push notifications to Sidra. Without them, the server sends no push. |
+| `PUSHLEFT_ADMIN_JWKS`, `PUSHLEFT_ADMIN_AUDIENCE` | The Pushleft Admin page. Pushleft sets them. Without them, `/_pushleft/admin` returns 404. |
 
 ## Ship
 
 - **Server:** push to `main`. GitHub Actions runs clippy and the tests, then `pl up --production` (Pushleft org `empire`, project `substrate`, `.pl.yaml`). Migrations run when the server starts.
-- **Relay:** run `cli/release.sh`. It builds both Mac architectures and puts them in the bucket behind `/install`. Running relays do not update themselves: run the installer again.
+- **Relay:** run `cli/release.sh`. It builds both Mac architectures and puts them in the bucket behind `/install`. To update a relay, run the installer again.
 
 [Operations](docs/operations.md) has the manual deploy, rollback, backups, logs and the runbook.
 
