@@ -6,6 +6,8 @@
 //! One resource: `users`, with usage over 30 days, and `suspend`/`unsuspend`
 //! (shown as Block and Unblock).
 
+#![allow(clippy::result_large_err)] // the error is the protocol's own response
+
 use axum::body::Bytes;
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
@@ -30,9 +32,20 @@ pub async fn handle(State(app): State<App>, method: Method, OriginalUri(uri): Or
     // the raw request target, as signed
     let target = uri.path_and_query().map(|p| p.as_str()).unwrap_or("");
     let bearer = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
-    let Some(sub) = verify(bearer, &jwks, &aud, method.as_str(), target, &body, Utc::now().timestamp()) else {
+    let Some((sub, jti, exp)) = verify(bearer, &jwks, &aud, method.as_str(), target, &body, Utc::now().timestamp()) else {
         return err(401, "unauthorized", "The request is not signed by Pushleft.");
     };
+    // a write runs once: the same signed request again is refused
+    if method != Method::GET {
+        let _ = sqlx::query("DELETE FROM admin_requests WHERE expires_at < now()").execute(&app.db).await;
+        let fresh = sqlx::query("INSERT INTO admin_requests (jti, expires_at) VALUES ($1, to_timestamp($2) + interval '30 seconds') ON CONFLICT DO NOTHING")
+            .bind(&jti).bind(exp as f64).execute(&app.db).await.map(|r| r.rows_affected() == 1);
+        match fresh {
+            Ok(true) => {}
+            Ok(false) => return err(401, "replayed", "This signed request was already used."),
+            Err(e) => return db(e),
+        }
+    }
     let path = uri.path().strip_prefix(PREFIX).unwrap_or("");
     let q: Vec<(String, String)> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).into_owned().collect();
     let input: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
@@ -54,7 +67,7 @@ pub async fn handle(State(app): State<App>, method: Method, OriginalUri(uri): Or
 }
 
 /// The six checks of the spec. Returns the signed-in person's email.
-pub fn verify(token: &str, jwks: &str, aud: &str, method: &str, target: &str, body: &[u8], now: i64) -> Option<String> {
+pub fn verify(token: &str, jwks: &str, aud: &str, method: &str, target: &str, body: &[u8], now: i64) -> Option<(String, String, i64)> {
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let mut parts = token.split('.');
     let (h, c, s) = (parts.next()?, parts.next()?, parts.next()?);
@@ -80,7 +93,7 @@ pub fn verify(token: &str, jwks: &str, aud: &str, method: &str, target: &str, bo
         && cl["method"] == method
         && cl["path"] == target
         && cl["body"] == hex::encode(Sha256::digest(body));
-    ok.then(|| cl["sub"].as_str().map(String::from)).flatten()
+    ok.then(|| Some((cl["sub"].as_str()?.to_string(), cl["jti"].as_str()?.to_string(), cl["exp"].as_i64()?))).flatten()
 }
 
 fn schema() -> Value {
@@ -237,9 +250,17 @@ async fn act(app: &AppInner, by: &str, id: &str, action: &str, input: &Value) ->
             Ok(json!({"item": one(app, id).await?, "message": "Blocked. The user is signed out everywhere."}))
         }
         "unsuspend" => {
+            let at: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT blocked_at FROM accounts WHERE id=$1").bind(id).fetch_one(&app.db).await.map_err(db)?;
+            let Some(at) = at else {
+                return Err(err(409, "not_blocked", "This user is not blocked."));
+            };
             // anything issued in a race with the block stays dead: the user signs in afresh
             sweep(app, id).await.map_err(|e| e.into_response())?;
-            sqlx::query("UPDATE accounts SET blocked_at=NULL, blocked_reason='' WHERE id=$1").bind(id).execute(&app.db).await.map_err(db)?;
+            // only the block that was read: a newer Block meanwhile stands
+            let n = sqlx::query("UPDATE accounts SET blocked_at=NULL, blocked_reason='' WHERE id=$1 AND blocked_at=$2").bind(id).bind(at).execute(&app.db).await.map_err(db)?.rows_affected();
+            if n != 1 {
+                return Err(err(409, "changed", "The user was blocked again meanwhile. Open the user again."));
+            }
             audit(app, id, "", &actor, "account.unblocked", id, "").await;
             Ok(json!({"item": one(app, id).await?, "message": "Unblocked. The user can sign in again."}))
         }
@@ -253,7 +274,7 @@ async fn act(app: &AppInner, by: &str, id: &str, action: &str, input: &Value) ->
 /// refuses a blocked account, so a token that a failed or racing cleanup leaves
 /// behind does not work.
 pub async fn block(app: &AppInner, id: &str, reason: &str) -> Result<(), crate::app::Fail> {
-    sqlx::query("UPDATE accounts SET blocked_at=coalesce(blocked_at, now()), blocked_reason=$2 WHERE id=$1").bind(id).bind(reason).execute(&app.db).await?;
+    sqlx::query("UPDATE accounts SET blocked_at=clock_timestamp(), blocked_reason=$2 WHERE id=$1").bind(id).bind(reason).execute(&app.db).await?;
     sweep(app, id).await
 }
 

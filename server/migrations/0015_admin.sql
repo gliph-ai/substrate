@@ -23,3 +23,22 @@ BEGIN
 END $$;
 CREATE TRIGGER tokens_refuse_blocked BEFORE INSERT ON tokens FOR EACH ROW EXECUTE FUNCTION refuse_blocked();
 CREATE TRIGGER machines_refuse_blocked BEFORE INSERT ON machines FOR EACH ROW EXECUTE FUNCTION refuse_blocked();
+
+-- Each signed write from Pushleft runs once (the token's jti), until it expires.
+CREATE TABLE admin_requests (
+  jti        TEXT PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+-- The same for a share link (its owner) and a pairing being approved.
+CREATE FUNCTION refuse_blocked_owner() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE b TIMESTAMPTZ;
+BEGIN
+  SELECT blocked_at INTO b FROM accounts WHERE id = NEW.owner_id FOR SHARE;
+  IF b IS NOT NULL THEN
+    RAISE EXCEPTION 'account % is blocked', NEW.owner_id USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER access_links_refuse_blocked BEFORE INSERT ON access_links FOR EACH ROW EXECUTE FUNCTION refuse_blocked_owner();
+CREATE TRIGGER pairings_refuse_blocked BEFORE INSERT OR UPDATE OF account_id ON pairings FOR EACH ROW EXECUTE FUNCTION refuse_blocked();

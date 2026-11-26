@@ -1157,7 +1157,7 @@ async fn pushleft_admin_users_and_block() {
         let now = chrono::Utc::now().timestamp();
         let h = b64.encode(json!({"alg": "ES256", "kid": "k1", "typ": "JWT"}).to_string());
         let c = b64.encode(json!({"iss": "https://api.pushleft.dev", "aud": aud, "sub": "ops@pushleft.dev", "role": "owner",
-            "iat": now, "exp": now + 60, "jti": "r1", "method": method, "path": path, "body": hex::encode(sha2::Sha256::digest(body))}).to_string());
+            "iat": now, "exp": now + 60, "jti": app::token_n(8), "method": method, "path": path, "body": hex::encode(sha2::Sha256::digest(body))}).to_string());
         let s = key.sign(&rng, format!("{h}.{c}").as_bytes()).unwrap();
         format!("{h}.{c}.{}", b64.encode(s.as_ref()))
     };
@@ -1200,15 +1200,19 @@ async fn pushleft_admin_users_and_block() {
     assert_eq!(call("POST", path, empty.clone(), sign("POST", path, empty.to_string().as_bytes(), aud)).await.0, 422);
     let body = json!({"input": {"reason": "abuse"}});
     assert_eq!(call("POST", path, body.clone(), sign("POST", path, b"{}", aud)).await.0, 401);
-    let (st, r) = call("POST", path, body.clone(), sign("POST", path, body.to_string().as_bytes(), aud)).await;
+    let tok = sign("POST", path, body.to_string().as_bytes(), aud);
+    let (st, r) = call("POST", path, body.clone(), tok.clone()).await;
     assert_eq!(st, 200, "{r}");
     assert_eq!(r["item"]["values"]["status"], "blocked");
+    assert_eq!(call("POST", path, body.clone(), tok).await.0, 401, "a signed write runs once");
     assert_eq!(r["item"]["values"]["machines"], 0);
     // signed out everywhere, and no new sign-in
     assert_eq!(t.relay_api(&mac, "GET", "/relay/api/whoami", json!({})).await.0, 401);
     let page = t.http.get(format!("{}/audit", t.base)).header("cookie", &dev.cookie).send().await.unwrap();
     assert_eq!(page.status(), 303);
     assert!(auth::upsert_account(&t.app, "dev@example.com").await.is_err());
+    assert!(auth::start_session(&t.app, &dev.account).await.is_err(), "no token for a blocked account");
+    assert!(substrate_server::links::create(&t.app, &dev.account, "again", &["p_adm".to_string()], substrate_server::links::Perms { read: true, deploys: false, files: false }, false, (false, false), 7).await.is_err(), "no share link either");
     let revoked: bool = sqlx::query_scalar("SELECT revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
     assert!(revoked);
     let (_, l) = call("GET", "/_pushleft/admin/users?view=blocked", json!(null), sign("GET", "/_pushleft/admin/users?view=blocked", b"", aud)).await;
