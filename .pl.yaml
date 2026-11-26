@@ -33,6 +33,8 @@ roles:
       - { name: APNS_KEY_P8, path: /secrets/apns.p8 }   # multi-line, so a file
       - { name: APNS_KEY_ID, as: env }
       - { name: APNS_TEAM_ID, as: env }
+      # Errors and request timings for Pushleft's Errors page (server/src/main.rs).
+      - { name: SENTRY_DSN, as: env }
     databases: [substrate]
     resources: { cpu: 0.5, memory: 512MiB }
     route:

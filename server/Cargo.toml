@@ -34,6 +34,8 @@ chimera = { git = "https://github.com/jamesondh/chimera-vocal-synth", rev = "c61
 flate2 = "1"
 # Signs the APNs provider token (ES256); already in the tree through rustls.
 ring = "0.17"
+# Errors and request timings to Pushleft's Errors page (any Sentry SDK). Off without SENTRY_DSN.
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls", "tracing"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -113,6 +113,7 @@ Each end-to-end test creates a new database on `SUBSTRATE_TEST_PG` (default `pos
 | `SES_KEY_ID`, `SES_SECRET`, `SES_REGION`, `MAIL_FROM` | Magic-link mail through Amazon SES. |
 | `GLIPH_URL`, `GLIPH_PLUGIN_TOKEN` | Gliph sign-in and the `/substrate` channel plugin. |
 | `APNS_KEY_PATH` (default `/secrets/apns.p8`, where Pushleft mounts the `APNS_KEY_P8` secret), `APNS_KEY_ID`, `APNS_TEAM_ID` | Approval push notifications to Sidra. Without them, the server sends no push. |
+| `SENTRY_DSN` | Errors and request timings to the Pushleft Errors page. Without it, the server sends nothing. |
 | `PUSHLEFT_ADMIN_JWKS`, `PUSHLEFT_ADMIN_AUDIENCE` | The Pushleft Admin page. Pushleft sets them. Without them, `/_pushleft/admin` returns 404. |
 
 ## Ship

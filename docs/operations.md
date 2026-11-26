@@ -10,7 +10,8 @@
 | Database | Pushleft PostgreSQL (`data.postgres`, database `substrate`). Migrations (`server/migrations`) run at boot. |
 | Files | bucket `files`: `attachments/<id>`, and relay releases in `downloads/substrate/` |
 | DNS | Porkbun CNAME `substrate.gliph.sh` → `substrate--205eb939.apps.pushleft.dev` |
-| Secrets | `SUBSTRATE_SECRET`, `GLIPH_PLUGIN_TOKEN`, `SES_KEY_ID`, `SES_SECRET`, `S3_*`, `AWS_*` (in Pushleft secrets) |
+| Secrets | `SUBSTRATE_SECRET`, `GLIPH_PLUGIN_TOKEN`, `SES_KEY_ID`, `SES_SECRET`, `S3_*`, `AWS_*`, `APNS_*`, `SENTRY_DSN` (in Pushleft secrets) |
+| Errors | Pushleft console, Observability › Errors (Sentry SDK in `server/src/main.rs`, 10% of requests traced) |
 | Mail | Amazon SES eu-west-1, from `noreply@substrate.gliph.sh` (the shared account; the subdomain sender makes mail clients show Substrate's icon, not Gliph's) |
 | Gliph | plugin `substrate` (kind agent) on gliph.sh. Gliph runs with `-substrate-callback https://substrate.gliph.sh/auth/gliph/callback`. |
 
