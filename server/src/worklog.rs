@@ -323,7 +323,8 @@ pub async fn ingest_batch(app: &AppInner, account: &str, machine: &str, b: &LogB
             }
             if a.kind == "artifact" && !a.url.is_empty() && (a.name.is_empty() || is_file_name(&a.name)) {
                 let names: Vec<String> = sqlx::query_scalar("SELECT a->>'name' FROM log_turns t, jsonb_array_elements(t.attachments) a
-                    WHERE t.owner_id=$1 AND a->>'kind'='artifact' AND a->>'url'=$2 AND a->>'name' <> ''").bind(account).bind(&a.url).fetch_all(&mut *tx).await?;
+                    WHERE t.owner_id=$1 AND t.attachments @> jsonb_build_array(jsonb_build_object('kind', 'artifact', 'url', $2::text))
+                    AND a->>'kind'='artifact' AND a->>'url'=$2 AND a->>'name' <> ''").bind(account).bind(&a.url).fetch_all(&mut *tx).await?;
                 if let Some(n) = names.into_iter().find(|n| !is_file_name(n)) {
                     a.name = n;
                 }

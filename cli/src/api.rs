@@ -17,7 +17,9 @@ impl Api {
     pub fn new(paths: &Paths, server: &str) -> Api {
         Api {
             server: server.to_string(),
-            http: reqwest::Client::builder().user_agent(concat!("substrate-cli/", env!("CARGO_PKG_VERSION"))).build().unwrap(),
+            http: reqwest::Client::builder().user_agent(concat!("substrate-cli/", env!("CARGO_PKG_VERSION")))
+                // a stalled connection fails and is retried, so one hung request never blocks a queue
+                .connect_timeout(std::time::Duration::from_secs(20)).read_timeout(std::time::Duration::from_secs(90)).timeout(std::time::Duration::from_secs(600)).build().unwrap(),
             store: Store::new(paths, server),
         }
     }

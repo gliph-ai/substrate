@@ -401,7 +401,7 @@ fn landing() -> Html<String> {
     Html(layout("Let testers talk to your coding agent", None, None, html! {
         section style="padding:56px 0 28px" class="stack" {
             h1.hero { "Let testers talk to " br; span.grad { "your coding agent." } }
-            p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant. You also get a summary of every turn your agents run." }
+            p.lead { "Testers tell their own assistant what they found. You approve the message, and it goes to the Claude Code session you have open. The reply goes back to their assistant. You also get a work log of the turns your agents finish, with a summary of each." }
             div.between style="padding-top:8px" {
                 div.row {
                     a.btn.primary href="/login" { (ic("terminal")) "Console" }
@@ -446,10 +446,10 @@ fn landing() -> Html<String> {
             }
         }
         section id="log" class="stack" style="padding:56px 0 16px" {
-            h2 { "A summary of every agent turn" }
+            h2 { "Summaries of your agent turns" }
             p.muted { "Hooks in Claude Code and Codex record each finished turn. The relay runs your own agent CLI on your Mac to write the summary." }
             div.grid {
-                div.card { span.ni.plain { (ic("list")) } h3 { "Steps and results" } span.muted { "Each turn gets a headline, its steps with the time of each, and the test results of the turn." } }
+                div.card { span.ni.plain { (ic("list")) } h3 { "Steps and results" } span.muted { "A summary has a headline, and the main steps and test results when the turn had them." } }
                 div.card { span.ni.plain { (ic("alert")) } h3 { "Decisions and open items" } span.muted { "Each decision comes with its reason, and with the other option when the agent named one. Tick off an open item when you fix it." } }
                 div.card { span.ni.plain { (ic("activity")) } h3 { "Tokens and cost" } span.muted { "See the tokens, the time and the cost at API list prices for each turn, day and project." } }
                 div.card { span.ni.plain { (ic("shield")) } h3 { "Diffs stay on your Mac" } span.muted { "Diffs, images and the tool log stay on your Mac. A turn page loads them from the relay when you open it." } }
