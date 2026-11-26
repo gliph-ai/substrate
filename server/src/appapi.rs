@@ -88,8 +88,10 @@ pub async fn auth_verify(State(app): State<App>, Json(r): Json<VerifyReq>) -> Re
 /// The account behind an app token.
 pub(crate) async fn bearer(app: &AppInner, headers: &HeaderMap) -> Result<String, Fail> {
     let t = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("").trim().to_string();
-    sqlx::query_scalar::<_, String>("SELECT account_id FROM tokens WHERE hash=$1 AND kind='app' AND expires_at > now()")
-        .bind(hash(&t)).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(401, "Sign in again."))
+    let a = sqlx::query_scalar::<_, String>("SELECT t.account_id FROM tokens t JOIN accounts a ON a.id=t.account_id WHERE t.hash=$1 AND t.kind='app' AND t.expires_at > now() AND a.blocked_at IS NULL")
+        .bind(hash(&t)).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(401, "Sign in again."))?;
+    crate::auth::seen(app, &a).await;
+    Ok(a)
 }
 
 /// POST /api/v1/auth/logout: this token stops working.

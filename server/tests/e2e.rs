@@ -1137,3 +1137,86 @@ async fn work_log_and_live_agents() {
     let r = t.http.get(format!("{}/log/turns/{tid}", t.base)).header("cookie", &other.cookie).send().await.unwrap();
     assert_eq!(r.status(), 404);
 }
+
+/// Pushleft's Admin page: only a request that Pushleft signed for this exact
+/// method, path and body gets in; Block signs the user out everywhere and
+/// refuses a new sign-in; Unblock lets them back in.
+#[tokio::test]
+async fn pushleft_admin_users_and_block() {
+    use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+    let t = setup().await;
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+    let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng).unwrap();
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let pk = key.public_key().as_ref();
+    std::env::set_var("PUSHLEFT_ADMIN_JWKS", json!({"keys": [{"kty": "EC", "crv": "P-256", "kid": "k1", "x": b64.encode(&pk[1..33]), "y": b64.encode(&pk[33..])}]}).to_string());
+    std::env::set_var("PUSHLEFT_ADMIN_AUDIENCE", "org/substrate/production");
+    let sign = |method: &str, path: &str, body: &[u8], aud: &str| {
+        use sha2::Digest;
+        let now = chrono::Utc::now().timestamp();
+        let h = b64.encode(json!({"alg": "ES256", "kid": "k1", "typ": "JWT"}).to_string());
+        let c = b64.encode(json!({"iss": "https://api.pushleft.dev", "aud": aud, "sub": "ops@pushleft.dev", "role": "owner",
+            "iat": now, "exp": now + 60, "jti": "r1", "method": method, "path": path, "body": hex::encode(sha2::Sha256::digest(body))}).to_string());
+        let s = key.sign(&rng, format!("{h}.{c}").as_bytes()).unwrap();
+        format!("{h}.{c}.{}", b64.encode(s.as_ref()))
+    };
+    let call = |method: &'static str, path: &'static str, body: Value, tok: String| {
+        let url = format!("{}{path}", t.base);
+        let req = if method == "GET" { t.http.get(url) } else { t.http.post(url).header("content-type", "application/json").body(body.to_string()) };
+        async move {
+            let r = req.bearer_auth(tok).send().await.unwrap();
+            (r.status().as_u16(), r.json::<Value>().await.unwrap_or(json!({})))
+        }
+    };
+    let aud = "org/substrate/production";
+
+    let dev = t.browser("dev@example.com").await;
+    let mac = t.pair(&dev).await;
+    let _tester = t.browser("tester@example.com").await;
+    sqlx::query("INSERT INTO projects (id, owner_id, handle, name) VALUES ('p_adm', $1, 'adm', 'adm')").bind(&dev.account).execute(&t.app.db).await.unwrap();
+    let (lid, _) = substrate_server::links::create(&t.app, &dev.account, "review", &["p_adm".to_string()], substrate_server::links::Perms { read: true, deploys: false, files: false }, false, (false, false), 7).await.unwrap();
+
+    // the six checks: unsigned, another audience, another path, another body
+    assert_eq!(call("GET", "/_pushleft/admin/schema", json!(null), String::new()).await.0, 401);
+    assert_eq!(call("GET", "/_pushleft/admin/schema", json!(null), sign("GET", "/_pushleft/admin/schema", b"", "org/substrate/preview")).await.0, 401);
+    assert_eq!(call("GET", "/_pushleft/admin/overview", json!(null), sign("GET", "/_pushleft/admin/schema", b"", aud)).await.0, 401);
+    let (st, s) = call("GET", "/_pushleft/admin/schema", json!(null), sign("GET", "/_pushleft/admin/schema", b"", aud)).await;
+    assert_eq!(st, 200);
+    assert_eq!(s["resources"][0]["name"], "users");
+
+    let (st, l) = call("GET", "/_pushleft/admin/users?q=dev%40", json!(null), sign("GET", "/_pushleft/admin/users?q=dev%40", b"", aud)).await;
+    assert_eq!(st, 200, "{l}");
+    assert_eq!(l["total"], 1);
+    let u = &l["items"][0];
+    assert_eq!(u["values"]["email"], "dev@example.com");
+    assert_eq!(u["values"]["machines"], 1);
+    assert_eq!(u["actions"], json!(["suspend"]));
+    let id = u["id"].as_str().unwrap().to_string();
+
+    // Block: a reason is required, and the body is signed
+    let path: &'static str = Box::leak(format!("/_pushleft/admin/users/{id}/actions/suspend").into_boxed_str());
+    let empty = json!({"input": {}});
+    assert_eq!(call("POST", path, empty.clone(), sign("POST", path, empty.to_string().as_bytes(), aud)).await.0, 422);
+    let body = json!({"input": {"reason": "abuse"}});
+    assert_eq!(call("POST", path, body.clone(), sign("POST", path, b"{}", aud)).await.0, 401);
+    let (st, r) = call("POST", path, body.clone(), sign("POST", path, body.to_string().as_bytes(), aud)).await;
+    assert_eq!(st, 200, "{r}");
+    assert_eq!(r["item"]["values"]["status"], "blocked");
+    assert_eq!(r["item"]["values"]["machines"], 0);
+    // signed out everywhere, and no new sign-in
+    assert_eq!(t.relay_api(&mac, "GET", "/relay/api/whoami", json!({})).await.0, 401);
+    let page = t.http.get(format!("{}/audit", t.base)).header("cookie", &dev.cookie).send().await.unwrap();
+    assert_eq!(page.status(), 303);
+    assert!(auth::upsert_account(&t.app, "dev@example.com").await.is_err());
+    let revoked: bool = sqlx::query_scalar("SELECT revoked FROM access_links WHERE id=$1").bind(&lid).fetch_one(&t.app.db).await.unwrap();
+    assert!(revoked);
+    let (_, l) = call("GET", "/_pushleft/admin/users?view=blocked", json!(null), sign("GET", "/_pushleft/admin/users?view=blocked", b"", aud)).await;
+    assert_eq!(l["total"], 1);
+
+    let path: &'static str = Box::leak(format!("/_pushleft/admin/users/{id}/actions/unsuspend").into_boxed_str());
+    let (st, r) = call("POST", path, empty.clone(), sign("POST", path, empty.to_string().as_bytes(), aud)).await;
+    assert_eq!(st, 200, "{r}");
+    assert_eq!(r["item"]["actions"], json!(["suspend"]));
+    assert!(auth::upsert_account(&t.app, "dev@example.com").await.is_ok());
+}

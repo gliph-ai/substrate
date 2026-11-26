@@ -96,7 +96,7 @@ async fn session(app: &App, rx: &mut mpsc::UnboundedReceiver<GliphOut>) -> anyho
 }
 
 async fn account_for_nick(app: &App, nick: &str) -> Option<String> {
-    sqlx::query_scalar("SELECT id FROM accounts WHERE gliph_nick=$1").bind(nick).fetch_optional(&app.db).await.ok().flatten()
+    sqlx::query_scalar("SELECT id FROM accounts WHERE gliph_nick=$1 AND blocked_at IS NULL").bind(nick).fetch_optional(&app.db).await.ok().flatten()
 }
 
 fn sign_in_hint(app: &App) -> String {
@@ -107,9 +107,9 @@ fn sign_in_hint(app: &App) -> String {
 /// one linked to this channel.
 async fn resolve(app: &App, account: &str, handle: Option<&str>, channel: &str) -> Result<Project, String> {
     let rows: Vec<Project> = match handle {
-        Some(h) => sqlx::query_as("SELECT p.* FROM projects p JOIN members m ON m.project_id=p.id AND m.account_id=$1 WHERE p.handle=$2")
+        Some(h) => sqlx::query_as("SELECT p.* FROM projects p JOIN members m ON m.project_id=p.id AND m.account_id=$1 JOIN accounts o ON o.id=p.owner_id AND o.blocked_at IS NULL WHERE p.handle=$2")
             .bind(account).bind(h).fetch_all(&app.db).await.map_err(|_| "database error".to_string())?,
-        None => sqlx::query_as("SELECT p.* FROM projects p JOIN members m ON m.project_id=p.id AND m.account_id=$1 WHERE p.gliph_channel=$2")
+        None => sqlx::query_as("SELECT p.* FROM projects p JOIN members m ON m.project_id=p.id AND m.account_id=$1 JOIN accounts o ON o.id=p.owner_id AND o.blocked_at IS NULL WHERE p.gliph_channel=$2")
             .bind(account).bind(channel).fetch_all(&app.db).await.map_err(|_| "database error".to_string())?,
     };
     match rows.len() {
@@ -206,7 +206,7 @@ async fn on_event(app: &App, e: &Value) -> anyhow::Result<()> {
     let Some(rest) = body.strip_prefix('@') else { return Ok(()) };
     let (handle, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     let channel = e["channel"].as_str().unwrap_or("");
-    let p: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE gliph_channel=$1 AND handle=$2").bind(channel).bind(handle).fetch_optional(&app.db).await?;
+    let p: Option<Project> = sqlx::query_as("SELECT p.* FROM projects p JOIN accounts o ON o.id=p.owner_id AND o.blocked_at IS NULL WHERE p.gliph_channel=$1 AND p.handle=$2").bind(channel).bind(handle).fetch_optional(&app.db).await?;
     let Some(p) = p else { return Ok(()) };
     if text.trim().is_empty() {
         return Ok(());

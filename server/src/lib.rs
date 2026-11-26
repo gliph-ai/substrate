@@ -1,6 +1,7 @@
 //! substrate-server: the Substrate cloud (docs/architecture.md).
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+pub mod admin;
 pub mod app;
 pub mod auth;
 pub mod aws;
@@ -218,6 +219,8 @@ pub fn router(app: App) -> Router {
         .route("/relay/api/approvals", get(relay::api_approvals))
         .route("/relay/api/inbox", get(relay::api_inbox))
         .route("/relay/api/messages/{mid}/{action}", post(relay::api_decide))
+        // Pushleft's Admin page (src/admin.rs): signed requests only.
+        .route("/_pushleft/admin/{*rest}", axum::routing::any(admin::handle))
         .fallback(|| async { (StatusCode::NOT_FOUND, web::not_found()) })
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(axum::middleware::from_fn(security_headers))

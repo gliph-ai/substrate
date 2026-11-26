@@ -77,7 +77,8 @@ pub async fn pair_token(State(app): State<App>, Json(p): Json<PairToken>) -> Res
         _ => return Ok((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "expired_token"}))).into_response()),
     }
     // Issue exactly once.
-    let n = sqlx::query("UPDATE pairings SET status='issued' WHERE device_hash=$1 AND status='approved'")
+    let n = sqlx::query("UPDATE pairings p SET status='issued' WHERE device_hash=$1 AND status='approved'
+         AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id=p.account_id AND a.blocked_at IS NOT NULL)")
         .bind(hash(&p.device_code)).execute(&app.db).await?.rows_affected();
     if n != 1 {
         return Ok((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "expired_token"}))).into_response());
@@ -108,8 +109,8 @@ pub struct Refresh {
 /// was copied, so the whole machine is revoked.
 pub async fn refresh(State(app): State<App>, Json(r): Json<Refresh>) -> Result<Json<Value>, Fail> {
     let row: Option<(String, String, bool)> = sqlx::query_as(
-        "SELECT t.account_id, t.machine_id, t.used FROM tokens t JOIN machines m ON m.id=t.machine_id
-         WHERE t.hash=$1 AND t.kind='machine_refresh' AND t.expires_at > now() AND NOT m.revoked",
+        "SELECT t.account_id, t.machine_id, t.used FROM tokens t JOIN machines m ON m.id=t.machine_id JOIN accounts a ON a.id=t.account_id
+         WHERE t.hash=$1 AND t.kind='machine_refresh' AND t.expires_at > now() AND NOT m.revoked AND a.blocked_at IS NULL",
     ).bind(hash(&r.refresh_token)).fetch_optional(&app.db).await?;
     let Some((account, machine, used)) = row else { return Err(Fail::new(401, "invalid_grant")) };
     if used {
@@ -156,8 +157,8 @@ pub async fn revoke_machine(app: &AppInner, account: &str, machine: &str, why: &
 pub async fn machine_auth(app: &AppInner, headers: &HeaderMap) -> Result<(String, String), Fail> {
     let t = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
     let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT t.account_id, t.machine_id FROM tokens t JOIN machines m ON m.id=t.machine_id
-         WHERE t.hash=$1 AND t.kind='machine_access' AND t.expires_at > now() AND NOT m.revoked",
+        "SELECT t.account_id, t.machine_id FROM tokens t JOIN machines m ON m.id=t.machine_id JOIN accounts a ON a.id=t.account_id
+         WHERE t.hash=$1 AND t.kind='machine_access' AND t.expires_at > now() AND NOT m.revoked AND a.blocked_at IS NULL",
     ).bind(hash(t.trim())).fetch_optional(&app.db).await?;
     row.ok_or_else(|| Fail::new(401, "unauthorized"))
 }

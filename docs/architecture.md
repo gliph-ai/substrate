@@ -174,6 +174,15 @@ Live agents: the owner can answer a blocked agent from the web or Sidra. `agent_
 `agent_prompt` types a prompt (after cancelling an open AskUserQuestion). Both are owner-only and audited (`agent.keys`, `agent.prompt`).
 This is the one place where the relay types something that is not an approved message.
 
+## Pushleft Admin page
+
+Pushleft's console shows an Admin page for Substrate (App admin protocol 1, `admin:` in `.pl.yaml`). The server answers it under `/_pushleft/admin` in `server/src/admin.rs`.
+
+- **Access.** Pushleft signs each request with ES256 for one method, path and body. The server checks the token against `PUSHLEFT_ADMIN_JWKS` and `PUSHLEFT_ADMIN_AUDIENCE`. Without the two variables the path answers `404`.
+- **Users.** One resource, `users`, with the last activity on top. Each user shows Macs, projects and testers, and messages and agent turns over 30 days, and the agent spend from the work log.
+- **Block.** Block needs a reason. It revokes every Mac of the user and deletes every token: browser and app sessions, personal and MCP tokens, share links. A blocked account cannot sign in again until an operator unblocks it. Unblock runs the same cleanup again, so the user signs in afresh. Gliph commands and channel messages for a blocked account are refused.
+- **Audit.** Each block and unblock is a row in `audit`, with `pushleft:<operator email>` as the actor and the reason.
+
 ## MCP
 
 Endpoint `/mcp`, Streamable HTTP, protocol 2025-06-18.

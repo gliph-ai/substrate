@@ -39,8 +39,8 @@ pub struct Perms {
 pub async fn resolve(app: &AppInner, secret: &str) -> Option<(String, String, Perms)> {
     let row: Option<(String, String, String, bool, bool, bool)> = sqlx::query_as(
         "SELECT l.id, l.account_id, l.label, l.can_read, l.can_deploys, l.can_files FROM tokens t
-         JOIN access_links l ON l.id=t.ref
-         WHERE t.hash=$1 AND t.kind='link' AND t.expires_at > now() AND NOT l.revoked AND l.expires_at > now()",
+         JOIN access_links l ON l.id=t.ref JOIN accounts o ON o.id=l.owner_id
+         WHERE t.hash=$1 AND t.kind='link' AND t.expires_at > now() AND NOT l.revoked AND l.expires_at > now() AND o.blocked_at IS NULL",
     ).bind(hash(secret)).fetch_optional(&app.db).await.ok().flatten();
     let (lid, account, label, read, deploys, files) = row?;
     let _ = sqlx::query("UPDATE access_links SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')")

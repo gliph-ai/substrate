@@ -48,9 +48,18 @@ pub async fn session(app: &AppInner, headers: &HeaderMap) -> Option<Account> {
     let t = cookie(headers, SESSION_COOKIE)?;
     let row: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT a.id, a.email, a.name, t.extra FROM tokens t JOIN accounts a ON a.id=t.account_id
-         WHERE t.hash=$1 AND t.kind='session' AND t.expires_at > now()",
+         WHERE t.hash=$1 AND t.kind='session' AND t.expires_at > now() AND a.blocked_at IS NULL",
     ).bind(hash(&t)).fetch_optional(&app.db).await.ok().flatten();
-    row.map(|(id, email, name, csrf)| Account { id, email, name, csrf })
+    let a = row.map(|(id, email, name, csrf)| Account { id, email, name, csrf })?;
+    seen(app, &a.id).await;
+    Some(a)
+}
+
+/// Last activity for the Admin page's users list, written at most once a minute per account.
+pub async fn seen(app: &AppInner, account: &str) {
+    if app.limiter.allow(&format!("seen:{account}"), 1.0 / 60.0, 1.0) {
+        let _ = sqlx::query("UPDATE accounts SET last_seen_at=now() WHERE id=$1").bind(account).execute(&app.db).await;
+    }
 }
 
 /// Extractor: a signed-in browser. Redirects to /login otherwise.
@@ -110,9 +119,13 @@ pub async fn start_session(app: &AppInner, account: &str) -> Result<String, Fail
 
 pub async fn upsert_account(app: &AppInner, email: &str) -> Result<String, Fail> {
     let email = email.trim().to_lowercase();
-    let aid: String = sqlx::query_scalar(
-        "INSERT INTO accounts (id, email) VALUES ($1,$2) ON CONFLICT (email) DO UPDATE SET email=EXCLUDED.email RETURNING id",
+    // Every sign-in (magic link, Gliph, the app's code) comes through here.
+    let (aid, blocked): (String, bool) = sqlx::query_as(
+        "INSERT INTO accounts (id, email, last_seen_at) VALUES ($1,$2,now()) ON CONFLICT (email) DO UPDATE SET last_seen_at=CASE WHEN accounts.blocked_at IS NULL THEN now() ELSE accounts.last_seen_at END RETURNING id, blocked_at IS NOT NULL",
     ).bind(id("u")).bind(&email).fetch_one(&app.db).await?;
+    if blocked {
+        return Err(Fail::new(403, "This account is blocked."));
+    }
     Ok(aid)
 }
 
@@ -300,10 +313,12 @@ pub async fn gliph_cb(State(app): State<App>, headers: HeaderMap, Query(q): Quer
 pub async fn mcp_bearer(app: &AppInner, headers: &HeaderMap) -> Option<(String, String)> {
     let t = headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")?.trim().to_string();
     let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT t.account_id, t.kind, COALESCE(c.name, '') FROM tokens t LEFT JOIN clients c ON c.id=t.client_id
-         WHERE t.hash=$1 AND t.kind IN ('oauth_access','pat') AND t.expires_at > now()",
+        "SELECT t.account_id, t.kind, COALESCE(c.name, '') FROM tokens t LEFT JOIN clients c ON c.id=t.client_id JOIN accounts a ON a.id=t.account_id
+         WHERE t.hash=$1 AND t.kind IN ('oauth_access','pat') AND t.expires_at > now() AND a.blocked_at IS NULL",
     ).bind(hash(&t)).fetch_optional(&app.db).await.ok().flatten();
-    row.map(|(a, kind, client)| (a, if kind == "pat" { "personal token".into() } else { client }))
+    let (a, kind, client) = row?;
+    seen(app, &a).await;
+    Some((a, if kind == "pat" { "personal token".into() } else { client }))
 }
 
 pub fn unauthorized_mcp(app: &AppInner) -> Response {

@@ -40,6 +40,10 @@ roles:
       # MCP long-polls (wait_for_update) answer within 25 s; uploads are small.
       timeout: 300
       min_tls: "1.3"
+# Pushleft's Admin page: users, usage over 30 days, Block and Unblock (server/src/admin.rs).
+admin:
+  role: web
+  path: /_pushleft/admin
 data:
   postgres:
     plan: dev
