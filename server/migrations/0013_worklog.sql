@@ -61,6 +61,8 @@ CREATE TABLE log_turns (
   summary_tokens BIGINT NOT NULL DEFAULT 0,
   summary_cost   DOUBLE PRECISION,
   summary_at     TIMESTAMPTZ,
+  -- the relay's job generation of the last summary report taken: an older one is dropped
+  summary_gen    BIGINT NOT NULL DEFAULT 0,
   search         TSVECTOR,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (owner_id, agent, session_id, turn_key)

@@ -13,14 +13,14 @@ use serde_json::Value;
 use crate::app::{now, App, Fail};
 use crate::auth::{check_csrf, Account, User};
 use crate::web::{agent_logo, ago_text, cmd, csrf, ic, layout, logo, notice, status_tag, truncate};
-use crate::worklog::{self, offset, ListQ};
+use crate::worklog::{self, ListQ, Zone};
 
 // ---- small pieces ----
 
-/// The reader's offset from UTC in minutes, from the `tz` cookie app.js sets.
-fn tz(headers: &HeaderMap) -> i32 {
+/// The reader's time zone, from the `tz` cookie app.js sets (an IANA name).
+fn tz(headers: &HeaderMap) -> Zone {
     headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';'))
-        .find_map(|c| c.trim().strip_prefix("tz=").and_then(|v| v.parse().ok())).unwrap_or(0)
+        .find_map(|c| c.trim().strip_prefix("tz=").map(|v| Zone::parse(&urlencoding::decode(v).unwrap_or_default()))).unwrap_or(Zone::Minutes(0))
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
@@ -32,11 +32,11 @@ fn n(v: &Value, k: &str) -> i64 {
 fn when(v: &Value) -> Option<DateTime<Utc>> {
     v.as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|d| d.with_timezone(&Utc))
 }
-fn clock(v: &Value, tz: i32) -> String {
-    when(v).map(|t| t.with_timezone(&offset(tz)).format("%H:%M").to_string()).unwrap_or_default()
+fn clock(v: &Value, tz: Zone) -> String {
+    when(v).map(|t| tz.at(&t).format("%H:%M").to_string()).unwrap_or_default()
 }
-fn date_time(v: &Value, tz: i32) -> String {
-    when(v).map(|t| t.with_timezone(&offset(tz)).format("%-d %b %H:%M").to_string()).unwrap_or_default()
+fn date_time(v: &Value, tz: Zone) -> String {
+    when(v).map(|t| tz.at(&t).format("%-d %b %H:%M").to_string()).unwrap_or_default()
 }
 fn ago_v(v: &Value) -> String {
     when(v).map(|t| ago_text(&t)).unwrap_or_default()
@@ -61,8 +61,8 @@ fn money(v: &Value) -> String {
     v.as_f64().map(|c| if c < 0.01 && c > 0.0 { "<$0.01".to_string() } else { format!("${c:.2}") }).unwrap_or_else(|| "n/a".into())
 }
 
-fn day_label(day: &str, tz: i32) -> String {
-    let today = now().with_timezone(&offset(tz)).date_naive();
+fn day_label(day: &str, tz: Zone) -> String {
+    let today = tz.at(&now()).date_naive();
     match NaiveDate::parse_from_str(day, "%Y-%m-%d") {
         Ok(d) if d == today => "Today".into(),
         Ok(d) if d == today - Duration::days(1) => "Yesterday".into(),
@@ -373,7 +373,7 @@ pub async fn repo_page(State(app): State<App>, headers: HeaderMap, User(a): User
                 div.list {
                     div.label { (ic("terminal")) "Sessions" }
                     @for x in ss {
-                        div.item { span.l { (agent_mark(s(x, "agent"))) span.mono.faint { (truncate(s(x, "session_id"), 12)) } span { (s(x, "machine")) } @if x["active"] == true { span.tag.blue { "active" } } } span.r.faint { (ago_v(&x["last_at"])) } }
+                        div.item { span.l { (agent_mark(s(x, "agent"))) span.mono.faint { (truncate(s(x, "session_id"), 12)) } span { (s(x, "machine")) } @if x["active"] == true { span.tag.blue { "recent" } } } span.r.faint { (ago_v(&x["last_at"])) } }
                     }
                 }
             }
@@ -571,7 +571,7 @@ pub async fn agents_page(State(app): State<App>, headers: HeaderMap, User(a): Us
     }))
 }
 
-fn agent_card(a: &Account, x: &Value, tz: i32) -> Markup {
+fn agent_card(a: &Account, x: &Value, tz: Zone) -> Markup {
     let base = format!("/agents/{}/{}", urlencoding::encode(s(x, "machine_id")), urlencoding::encode(s(x, "pane_id")));
     let name = x["project"]["name"].as_str().or(x["repo"]["name"].as_str()).unwrap_or(s(x, "title")).to_string();
     let status = s(x, "status");
@@ -602,7 +602,7 @@ fn agent_card(a: &Account, x: &Value, tz: i32) -> Markup {
                             legend style="font-weight:500;padding:0 0 6px" { @if !s(q, "header").is_empty() { span.tag { (s(q, "header")) } " " } (s(q, "question")) }
                             @for o in q["options"].as_array().into_iter().flatten() {
                                 label.row style="gap:10px;align-items:flex-start" {
-                                    input type=(if q["multiSelect"] == true { "checkbox" } else { "radio" }) name=(format!("q{i}")) value=(s(o, "label")) required[q["multiSelect"] != true];
+                                    input type=(if q["multiSelect"] == true { "checkbox" } else { "radio" }) name=(format!("q{i}")) value=(s(o, "label"));
                                     span.stack style="gap:2px" { span { (s(o, "label")) } @if !s(o, "description").is_empty() { span.faint style="font-size:13px" { (s(o, "description")) } } }
                                 }
                             }

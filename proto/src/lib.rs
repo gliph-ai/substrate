@@ -362,6 +362,16 @@ pub struct LogSummaryReport {
     /// What the summariser's CLI reported, when it reports a cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<f64>,
+    /// With done: the `ended_at` and `model_calls` of the turn as it was summarised. The
+    /// cloud drops a summary of an older copy of a turn that has since grown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ended_at: String,
+    #[serde(default)]
+    pub model_calls: u32,
+    /// The job's generation on the Mac: each "queue again" raises it. The cloud drops a
+    /// report older than the last one it took. 0 from a relay before 0.1.18.
+    #[serde(default)]
+    pub gen: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

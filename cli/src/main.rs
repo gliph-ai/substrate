@@ -515,6 +515,10 @@ async fn run() -> Result<()> {
                     let (q, jobs, failed, bytes) = worker::counts(&paths);
                     println!("upload queue: {q} batches{}", if q > 0 && !launchd::loaded() { " (the relay is not running: substrate daemon install)" } else { "" });
                     println!("summaries: {jobs} waiting, {failed} failed");
+                    let refused = std::fs::read_dir(paths.root.join("worklog").join("queue")).into_iter().flatten().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "refused")).count();
+                    if refused > 0 {
+                        println!("refused by the server: {refused} batches (kept in worklog/queue/*.refused; see substrate logs)");
+                    }
                     println!("local store: {:.1} MB (logs, diffs and images stay on this Mac)", bytes as f64 / 1e6);
                 }
                 LogCmd::Backfill { summarize, since, include_exec } => {

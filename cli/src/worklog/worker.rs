@@ -42,6 +42,9 @@ pub struct Job {
     /// The state the cloud has not heard yet.
     #[serde(default)]
     pub report: Option<LogSummaryReport>,
+    /// Bumped by each enqueue: a run applies its result only while its generation is current.
+    #[serde(default)]
+    pub gen: u64,
 }
 
 pub fn turn_ref(t: &Turn) -> TurnRef {
@@ -60,12 +63,12 @@ pub fn load(paths: &Paths, r: &TurnRef) -> Option<Stored> {
     std::fs::read(store_path(paths, r)).ok().and_then(|b| serde_json::from_slice(&b).ok())
 }
 
-fn save(paths: &Paths, s: &Stored) {
-    let _ = write_private(&store_path(paths, &turn_ref(&s.turn)), &serde_json::to_vec(s).unwrap_or_default());
+fn save(paths: &Paths, s: &Stored) -> Result<()> {
+    write_private(&store_path(paths, &turn_ref(&s.turn)), &serde_json::to_vec(s)?)
 }
 
-fn report(turn: &TurnRef, status: &str, error: &str) -> LogSummaryReport {
-    LogSummaryReport { turn: turn.clone(), status: status.into(), error: error.chars().take(1000).collect(), ..Default::default() }
+fn report(turn: &TurnRef, status: &str, error: &str, gen: u64) -> LogSummaryReport {
+    LogSummaryReport { turn: turn.clone(), status: status.into(), error: error.chars().take(1000).collect(), gen, ..Default::default() }
 }
 
 fn jobs(paths: &Paths) -> Vec<(PathBuf, Job)> {
@@ -112,21 +115,43 @@ impl Worker {
     }
 
     fn update_job(&self, r: &TurnRef, f: impl FnOnce(&mut Job)) {
+        let _ = self.try_update_job(r, f);
+    }
+
+    fn try_update_job(&self, r: &TurnRef, f: impl FnOnce(&mut Job)) -> Result<()> {
         let _g = self.jobs_lock.lock().unwrap();
+        self.update_job_locked(r, f)
+    }
+
+    /// The caller holds `jobs_lock`. The turn store is written under the same lock, so a
+    /// summary run never writes over a newer copy of its turn or a newer job.
+    fn update_job_locked(&self, r: &TurnRef, f: impl FnOnce(&mut Job)) -> Result<()> {
         let p = job_path(&self.paths, r);
         let mut j: Job = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| Job { turn: r.clone(), ..Default::default() });
         f(&mut j);
         if j.status == "done" && j.report.is_none() {
             let _ = std::fs::remove_file(&p);
+            Ok(())
         } else {
-            let _ = write_private(&p, &serde_json::to_vec(&j).unwrap_or_default());
+            write_private(&p, &serde_json::to_vec(&j)?)
         }
     }
 
     pub fn enqueue(&self, r: &TurnRef) {
-        self.update_job(r, |j| {
-            *j = Job { turn: r.clone(), status: "queued".into(), attempts: 0, next_at: 0, report: Some(report(r, "queued", "")) };
-        });
+        let _ = self.try_enqueue(r);
+    }
+
+    fn try_enqueue(&self, r: &TurnRef) -> Result<()> {
+        let _g = self.jobs_lock.lock().unwrap();
+        self.enqueue_locked(r)
+    }
+
+    fn enqueue_locked(&self, r: &TurnRef) -> Result<()> {
+        self.update_job_locked(r, |j| {
+            // milliseconds, not a count: a finished job's file is deleted, and the next job must still be newer
+            let gen = (j.gen + 1).max(chrono::Utc::now().timestamp_millis() as u64);
+            *j = Job { turn: r.clone(), status: "queued".into(), attempts: 0, next_at: 0, report: Some(report(r, "queued", "", gen)), gen };
+        })
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -164,12 +189,17 @@ impl Worker {
             let mut keep = vec![];
             for t in &b.turns {
                 let old = load(&self.paths, &turn_ref(t));
-                let grew = old.as_ref().is_none_or(|o| o.turn.ended_at != t.ended_at || o.turn.model_calls != t.model_calls);
+                // newer only: a later end, or the same end with more model calls (an older copy never wins)
+                let at = |x: &str| chrono::DateTime::parse_from_rfc3339(x).ok();
+                let grew = old.as_ref().is_none_or(|o| at(&t.ended_at) > at(&o.turn.ended_at) || (t.ended_at == o.turn.ended_at && t.model_calls > o.turn.model_calls));
                 let wants = b.summarize && old.as_ref().is_none_or(|o| grew || matches!(o.summary.as_str(), "" | "skipped"));
                 if !grew && !wants {
                     continue;
                 }
-                let status = if wants { "queued".to_string() } else { old.as_ref().map(|o| o.summary.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "skipped".into()) };
+                // a turn that changed with no new summary coming loses its old one (as in the cloud)
+                let status = if wants { "queued".to_string() } else { "skipped".to_string() };
+                // an older copy that only asks for a summary: the stored, newer copy is the one to summarise
+                let t = if grew { t } else { &old.as_ref().unwrap().turn };
                 send.push(to_wire(t, &status));
                 keep.push(Stored { repo: b.repo.clone(), turn: t.clone(), summary: status });
                 if wants {
@@ -179,18 +209,34 @@ impl Worker {
             if !send.is_empty() {
                 let body = serde_json::to_value(LogBatch { repo: b.repo.clone(), turns: send })?;
                 let (st, v) = self.api.post_status("/relay/log/turns", &body).await?;
-                if st == 400 || st == 413 {
+                if st == 413 && b.turns.len() > 1 {
+                    // too large as one: two halves go back in the queue
+                    let (a, c) = b.turns.split_at(b.turns.len() / 2);
+                    for (i, half) in [a, c].into_iter().enumerate() {
+                        let name = f.with_extension(format!("{i}.json"));
+                        write_private(&name, &serde_json::to_vec(&Batch { turns: half.to_vec(), ..b.clone() })?)?;
+                    }
+                    std::fs::remove_file(&f)?;
+                    continue;
+                } else if st == 400 || st == 413 {
+                    // kept for a look (`substrate log status` counts them), never sent again
                     log(&self.paths, "warn", "work log batch refused", json!({"file": f.to_string_lossy(), "error": v["error"]}));
+                    std::fs::rename(&f, f.with_extension("refused"))?;
+                    continue;
                 } else if !(200..300).contains(&st) {
                     anyhow::bail!("upload failed: {st} {}", v["error"].as_str().unwrap_or(""));
                 } else {
                     // Kept only once the cloud has the turn: a failed upload is sent again whole.
-                    for s in &keep {
-                        save(&self.paths, s);
-                    }
+                    // The jobs go first: a turn stored without its job would never be summarised.
+                    // A write that fails keeps the queue file, and the next pass sends it again.
+                    let _g = self.jobs_lock.lock().unwrap();
                     for r in &summarise {
-                        self.enqueue(r);
+                        self.enqueue_locked(r)?;
                     }
+                    for s in &keep {
+                        save(&self.paths, s)?;
+                    }
+                    drop(_g);
                     self.icon(&b.repo).await;
                 }
             }
@@ -245,53 +291,78 @@ impl Worker {
             if self.running.load(Ordering::SeqCst) >= 2 {
                 return;
             }
-            self.running.fetch_add(1, Ordering::SeqCst);
-            self.update_job(&j.turn, |j| {
-                j.status = "running".into();
-                j.report = Some(report(&j.turn, "running", ""));
+            // under the job lock: only the generation that was read, and only while still queued
+            let mut started = false;
+            self.update_job(&j.turn, |cur| {
+                if cur.gen == j.gen && cur.status == "queued" {
+                    cur.status = "running".into();
+                    cur.report = Some(report(&cur.turn, "running", "", cur.gen));
+                    started = true;
+                }
             });
+            if !started {
+                continue;
+            }
+            self.running.fetch_add(1, Ordering::SeqCst);
             let me = self.clone();
             tokio::spawn(async move {
-                me.summarise(&j.turn).await;
+                me.summarise(&j.turn, j.gen).await;
                 me.running.fetch_sub(1, Ordering::SeqCst);
             });
         }
     }
 
-    async fn summarise(&self, r: &TurnRef) {
+    async fn summarise(&self, r: &TurnRef, gen: u64) {
         let res = match load(&self.paths, r) {
             Some(s) => summarize::summarise_with(&r.agent, &summarize::build_prompt(&s.turn, &s.repo.name), &dir(&self.paths, "work")).await.map(|o| (s, o)),
             None => Err(anyhow::anyhow!("the turn is not on this Mac any more")),
         };
         match res {
             Ok((mut s, o)) => {
+                // the turn grew, or the job was queued again, while this ran: the newer run writes it
+                let _g = self.jobs_lock.lock().unwrap();
+                let now = load(&self.paths, r);
+                if self.job_gen(r) != gen || now.as_ref().is_some_and(|n| n.turn.ended_at != s.turn.ended_at || n.turn.model_calls != s.turn.model_calls) {
+                    return;
+                }
                 s.summary = "done".into();
-                save(&self.paths, &s);
-                self.update_job(r, |j| {
+                let _ = save(&self.paths, &s);
+                let (ended_at, model_calls) = (s.turn.ended_at.clone(), s.turn.model_calls);
+                let _ = self.update_job_locked(r, |j| {
                     j.status = "done".into();
-                    j.report = Some(LogSummaryReport { turn: r.clone(), status: "done".into(), error: String::new(), summary: Some(o.summary), model: o.model, tokens: o.tokens, cost: o.cost });
+                    j.report = Some(LogSummaryReport { turn: r.clone(), status: "done".into(), error: String::new(), summary: Some(o.summary), model: o.model, tokens: o.tokens, cost: o.cost, ended_at, model_calls, gen });
                 });
             }
             Err(e) => {
                 let err = e.to_string();
                 log(&self.paths, "warn", "summary failed", json!({"turn": r.turn_key, "error": err}));
-                self.update_job(r, |j| {
+                let mut current = true;
+                let _g = self.jobs_lock.lock().unwrap();
+                let _ = self.update_job_locked(r, |j| {
+                    if j.gen != gen {
+                        current = false; // queued again meanwhile: the newer run owns the job
+                        return;
+                    }
                     j.attempts += 1;
                     if j.attempts < 3 {
                         j.status = "queued".into();
                         j.next_at = now_s() + if j.attempts == 1 { 30 } else { 120 };
-                        j.report = Some(report(r, "queued", &err));
+                        j.report = Some(report(r, "queued", &err, gen));
                     } else {
                         j.status = "failed".into();
-                        j.report = Some(report(r, "failed", &err));
+                        j.report = Some(report(r, "failed", &err, gen));
                     }
                 });
-                if let Some(mut s) = load(&self.paths, r).filter(|_| self.job_status(r) == "failed") {
+                if let Some(mut s) = load(&self.paths, r).filter(|_| current && self.job_status(r) == "failed") {
                     s.summary = "failed".into();
-                    save(&self.paths, &s);
+                    let _ = save(&self.paths, &s);
                 }
             }
         }
+    }
+
+    fn job_gen(&self, r: &TurnRef) -> u64 {
+        std::fs::read(job_path(&self.paths, r)).ok().and_then(|b| serde_json::from_slice::<Job>(&b).ok()).map(|j| j.gen).unwrap_or(0)
     }
 
     fn job_status(&self, r: &TurnRef) -> String {
@@ -304,16 +375,16 @@ impl Worker {
         if load(&self.paths, r).is_none() {
             return (404, json!({"error": "this turn is not on the Mac any more"}));
         }
-        self.enqueue(r);
-        (200, json!({"ok": true}))
+        match self.try_enqueue(r) {
+            Ok(()) => (200, json!({"ok": true})),
+            Err(e) => (500, json!({"error": format!("the relay could not queue the summary: {e}")})),
+        }
     }
 
     pub fn retry_failed(&self) -> (u16, Value) {
         let failed: Vec<TurnRef> = jobs(&self.paths).into_iter().filter(|(_, j)| j.status == "failed").map(|(_, j)| j.turn).collect();
-        for r in &failed {
-            self.enqueue(r);
-        }
-        (200, json!({"retried": failed.len()}))
+        let retried = failed.iter().filter(|r| self.try_enqueue(r).is_ok()).count();
+        (200, json!({"retried": retried}))
     }
 }
 

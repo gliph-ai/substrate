@@ -17,7 +17,7 @@ use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
-use chrono::{DateTime, Duration, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use substrate_proto::{self as proto, LogBatch, LogSummaryReport, Pane, Tokens, TurnRef};
@@ -92,32 +92,65 @@ pub fn spawn_prices(app: App) {
 }
 
 pub async fn fill_costs(app: &AppInner) -> Result<(), Fail> {
-    let rows: Vec<(i64, String, i64, i64, i64, i64)> = sqlx::query_as("SELECT id, model, in_tok, out_tok, cache_read, cache_write FROM log_turns WHERE cost IS NULL AND model <> '' LIMIT 50000")
-        .fetch_all(&app.db).await?;
-    for (id, model, i, o, cr, cw) in rows {
-        if let Some(c) = cost_of(&model, &Tokens { input: i as u64, output: o as u64, cache_read: cr as u64, cache_write: cw as u64 }) {
-            sqlx::query("UPDATE log_turns SET cost=$2 WHERE id=$1").bind(id).bind(c).execute(&app.db).await?;
+    // pages by id, so rows of models with no price never block the rows after them
+    let mut after = 0i64;
+    loop {
+        let rows: Vec<(i64, String, i64, i64, i64, i64)> = sqlx::query_as("SELECT id, model, in_tok, out_tok, cache_read, cache_write FROM log_turns WHERE cost IS NULL AND model <> '' AND id > $1 ORDER BY id LIMIT 5000")
+            .bind(after).fetch_all(&app.db).await?;
+        let Some(last) = rows.last().map(|r| r.0) else { return Ok(()) };
+        after = last;
+        for (id, model, i, o, cr, cw) in rows {
+            if let Some(c) = cost_of(&model, &Tokens { input: i as u64, output: o as u64, cache_read: cr as u64, cache_write: cw as u64 }) {
+                sqlx::query("UPDATE log_turns SET cost=$2 WHERE id=$1").bind(id).bind(c).execute(&app.db).await?;
+            }
         }
     }
-    Ok(())
 }
 
 // ---------- time: the cloud runs UTC, days are the reader's ----------
 
 /// `tz` is minutes east of UTC (the browser's `-getTimezoneOffset()`).
-pub fn offset(tz: i32) -> FixedOffset {
+fn offset(tz: i32) -> FixedOffset {
     FixedOffset::east_opt(tz.clamp(-840, 840) * 60).unwrap_or(FixedOffset::east_opt(0).unwrap())
 }
 
-pub fn since_for(range: &str, tz: i32) -> DateTime<Utc> {
-    let off = offset(tz);
-    let days = match range { "today" => 1, "month" => 30, "all" => 36500, _ => 7 };
-    let d = now().with_timezone(&off).date_naive() - Duration::days(days - 1);
-    off.from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap()).single().map(|t| t.with_timezone(&Utc)).unwrap_or_else(now)
+/// The reader's time zone: an IANA name (each date gets its own offset, so a daylight
+/// saving change is right), or a fixed offset in minutes east of UTC.
+#[derive(Clone, Copy, Debug)]
+pub enum Zone {
+    Minutes(i32),
+    Named(chrono_tz::Tz),
 }
 
-pub fn local_day(t: &DateTime<Utc>, tz: i32) -> String {
-    t.with_timezone(&offset(tz)).format("%Y-%m-%d").to_string()
+impl Zone {
+    pub fn parse(s: &str) -> Zone {
+        let s = s.trim();
+        s.parse::<chrono_tz::Tz>().map(Zone::Named).unwrap_or_else(|_| Zone::Minutes(s.parse().unwrap_or(0)))
+    }
+    /// The moment as the reader's wall clock shows it.
+    pub fn at(&self, t: &DateTime<Utc>) -> DateTime<FixedOffset> {
+        match self {
+            Zone::Minutes(m) => t.with_timezone(&offset(*m)),
+            Zone::Named(z) => t.with_timezone(z).fixed_offset(),
+        }
+    }
+    /// The start of a local day.
+    pub fn midnight(&self, d: chrono::NaiveDate) -> DateTime<Utc> {
+        let n = d.and_hms_opt(0, 0, 0).unwrap();
+        match self {
+            Zone::Minutes(m) => offset(*m).from_local_datetime(&n).earliest().map(|t| t.with_timezone(&Utc)),
+            Zone::Named(z) => z.from_local_datetime(&n).earliest().map(|t| t.with_timezone(&Utc)),
+        }.unwrap_or_else(now)
+    }
+}
+
+pub fn since_for(range: &str, tz: Zone) -> DateTime<Utc> {
+    let days = match range { "today" => 1, "month" => 30, "all" => 36500, _ => 7 };
+    tz.midnight(tz.at(&now()).date_naive() - Duration::days(days - 1))
+}
+
+pub fn local_day(t: &DateTime<Utc>, tz: Zone) -> String {
+    tz.at(t).format("%Y-%m-%d").to_string()
 }
 
 fn norm_range(r: Option<&str>) -> &'static str {
@@ -244,8 +277,10 @@ async fn reindex<'e, E: sqlx::PgExecutor<'e>>(db: E, id: i64) -> Result<(), sqlx
     Ok(())
 }
 
+/// Cut to microseconds, as Postgres stores it: a repeat with nanoseconds would read as newer.
 fn ts(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    use chrono::DurationRound;
+    DateTime::parse_from_rfc3339(s).ok().and_then(|d| d.with_timezone(&Utc).duration_trunc(chrono::Duration::microseconds(1)).ok())
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -294,12 +329,16 @@ pub async fn ingest_batch(app: &AppInner, account: &str, machine: &str, b: &LogB
                 }
             }
         }
-        let status = if t.summary_status == "skipped" { "skipped" } else { "queued" };
+        // queued: a summary follows (and replaces the old one, keeping the state of identical items).
+        // Anything else means none follows for this content: the old summary is cleared below.
+        let status = if matches!(t.summary_status.as_str(), "queued" | "running") { "queued" } else { "skipped" };
         let cost = cost_of(&t.model, &t.tokens);
         let old: Option<(i64, DateTime<Utc>, i32, String)> = sqlx::query_as("SELECT id, ended_at, model_calls, summary_status FROM log_turns WHERE owner_id=$1 AND agent=$2 AND session_id=$3 AND turn_key=$4")
             .bind(account).bind(&t.id.agent).bind(&t.id.session_id).bind(&t.id.turn_key).fetch_optional(&mut *tx).await?;
+        let mut updated_now = false;
         let tid = match old {
-            Some((id, old_end, calls, st)) if !(end > old_end || t.model_calls as i32 != calls) => {
+            // newer wins; at the same end time more model calls is the turn going on. An older copy never overwrites.
+            Some((id, old_end, calls, st)) if !(end > old_end || (end == old_end && t.model_calls as i32 > calls)) => {
                 // unchanged, but imported without a summary and now one is asked for
                 if status == "queued" && (st == "skipped" || st == "none") {
                     sqlx::query("UPDATE log_turns SET summary_status='queued', summary_error='' WHERE id=$1").bind(id).execute(&mut *tx).await?;
@@ -308,6 +347,7 @@ pub async fn ingest_batch(app: &AppInner, account: &str, machine: &str, b: &LogB
             }
             Some((id, ..)) => {
                 updated += 1;
+                updated_now = true;
                 id
             }
             None => {
@@ -324,6 +364,17 @@ pub async fn ingest_batch(app: &AppInner, account: &str, machine: &str, b: &LogB
             .bind(t.tokens.input as i64).bind(t.tokens.output as i64).bind(t.tokens.cache_read as i64).bind(t.tokens.cache_write as i64).bind(t.model_calls as i32)
             .bind(sqlx::types::Json(&t.tools)).bind(sqlx::types::Json(&t.files)).bind(sqlx::types::Json(&atts)).bind(cost).bind(status)
             .execute(&mut *tx).await?;
+        if updated_now {
+            // the turn changed: its old summary no longer describes it
+            sqlx::query("UPDATE log_turns SET headline='', summary='[]', verdict='', steps='[]' WHERE id=$1").bind(tid).execute(&mut *tx).await?;
+        }
+        if updated_now && status == "skipped" {
+            // no new summary follows, so the notes go too. When one follows, its items replace
+            // these and keep the done, dismissed or superseded state of identical text.
+            sqlx::query("DELETE FROM log_watch WHERE turn_id=$1").bind(tid).execute(&mut *tx).await?;
+            sqlx::query("UPDATE log_decisions SET status='active', superseded_by=NULL WHERE superseded_by IN (SELECT id FROM log_decisions WHERE turn_id=$1)").bind(tid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM log_decisions WHERE turn_id=$1").bind(tid).execute(&mut *tx).await?;
+        }
         reindex(&mut *tx, tid).await?;
     }
     tx.commit().await?;
@@ -339,13 +390,20 @@ pub async fn summary(State(app): State<App>, headers: HeaderMap, Json(r): Json<L
 }
 
 pub async fn store_summary(app: &AppInner, account: &str, r: &LogSummaryReport) -> Result<(), Fail> {
-    let row: Option<(i64, i64, DateTime<Utc>)> = sqlx::query_as("SELECT id, repo_id, ended_at FROM log_turns WHERE owner_id=$1 AND agent=$2 AND session_id=$3 AND turn_key=$4")
+    let row: Option<(i64, i64, DateTime<Utc>, i32)> = sqlx::query_as("SELECT id, repo_id, ended_at, model_calls FROM log_turns WHERE owner_id=$1 AND agent=$2 AND session_id=$3 AND turn_key=$4")
         .bind(account).bind(&r.turn.agent).bind(&r.turn.session_id).bind(&r.turn.turn_key).fetch_optional(&app.db).await?;
-    let Some((tid, rid, ended)) = row else { return Err(Fail::new(404, "no such turn")) };
+    let Some((tid, rid, ended, calls)) = row else { return Err(Fail::new(404, "no such turn")) };
+    // a summary of an older copy of the turn: the newer copy's own job replaces it
+    if r.status == "done" && (ts(&r.ended_at).is_some_and(|e| e != ended) || (r.model_calls > 0 && r.model_calls as i32 != calls)) {
+        return Ok(());
+    }
+    // Every write below takes the report only when it is not older than the last one taken
+    // (summary_gen): a late "running" never covers a newer "done".
+    let gen = r.gen as i64;
     let err = clip(&r.error, 1000);
     match (r.status.as_str(), &r.summary) {
         ("queued" | "running" | "failed", _) => {
-            sqlx::query("UPDATE log_turns SET summary_status=$2, summary_error=$3 WHERE id=$1").bind(tid).bind(&r.status).bind(&err).execute(&app.db).await?;
+            sqlx::query("UPDATE log_turns SET summary_status=$2, summary_error=$3, summary_gen=$4 WHERE id=$1 AND summary_gen <= $4").bind(tid).bind(&r.status).bind(&err).bind(gen).execute(&app.db).await?;
             return Ok(());
         }
         ("done", Some(_)) => {}
@@ -367,22 +425,34 @@ pub async fn store_summary(app: &AppInner, account: &str, r: &LogSummaryReport) 
     let tok = (r.tokens.input + r.tokens.output + r.tokens.cache_read + r.tokens.cache_write) as i64;
     let cost = r.cost.or_else(|| cost_of(&r.model, &r.tokens));
     let mut tx = app.db.begin().await?;
-    sqlx::query("UPDATE log_turns SET headline=$2, summary=$3, verdict=$4, steps=$5, summary_status='done', summary_error='', summary_model=$6, summary_tokens=$7, summary_cost=$8, summary_at=now() WHERE id=$1")
-        .bind(tid).bind(&headline).bind(sqlx::types::Json(&summary)).bind(verdict).bind(sqlx::types::Json(&steps)).bind(clip(&r.model, 100)).bind(tok).bind(cost).execute(&mut *tx).await?;
-    // A redo replaces the turn's items; the done or dismissed state of identical text stays.
-    let old_w: Vec<(String, String, Option<DateTime<Utc>>)> = sqlx::query_as("SELECT text, status, done_at FROM log_watch WHERE turn_id=$1").bind(tid).fetch_all(&mut *tx).await?;
-    let old_d: Vec<(String, String)> = sqlx::query_as("SELECT text, status FROM log_decisions WHERE turn_id=$1").bind(tid).fetch_all(&mut *tx).await?;
-    sqlx::query("DELETE FROM log_watch WHERE turn_id=$1").bind(tid).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM log_decisions WHERE turn_id=$1").bind(tid).execute(&mut *tx).await?;
+    let took = sqlx::query("UPDATE log_turns SET headline=$2, summary=$3, verdict=$4, steps=$5, summary_status='done', summary_error='', summary_model=$6, summary_tokens=$7, summary_cost=$8, summary_at=now(), summary_gen=$9
+        WHERE id=$1 AND summary_gen <= $9")
+        .bind(tid).bind(&headline).bind(sqlx::types::Json(&summary)).bind(verdict).bind(sqlx::types::Json(&steps)).bind(clip(&r.model, 100)).bind(tok).bind(cost).bind(gen).execute(&mut *tx).await?.rows_affected();
+    if took == 0 {
+        return Ok(()); // a newer report came first; the transaction rolls back unused
+    }
+    // A redo keeps each item whose text is the same (its id, and its done or dismissed state),
+    // adds the new ones and removes the ones that are gone.
+    let old_w: Vec<(i64, String)> = sqlx::query_as("SELECT id, text FROM log_watch WHERE turn_id=$1").bind(tid).fetch_all(&mut *tx).await?;
+    let old_d: Vec<(i64, String)> = sqlx::query_as("SELECT id, text FROM log_decisions WHERE turn_id=$1").bind(tid).fetch_all(&mut *tx).await?;
+    let gone_w: Vec<i64> = old_w.iter().filter(|o| !watch.iter().any(|w| w.0 == o.1)).map(|o| o.0).collect();
+    let gone_d: Vec<i64> = old_d.iter().filter(|o| !decisions.iter().any(|d| d.0 == o.1)).map(|o| o.0).collect();
+    sqlx::query("DELETE FROM log_watch WHERE id = ANY($1)").bind(&gone_w).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM log_decisions WHERE id = ANY($1)").bind(&gone_d).execute(&mut *tx).await?;
+    sqlx::query("UPDATE log_decisions SET status='active', superseded_by=NULL WHERE superseded_by = ANY($1)").bind(&gone_d).execute(&mut *tx).await?;
     for (text, impact) in &watch {
-        let o = old_w.iter().find(|w| &w.0 == text);
-        sqlx::query("INSERT INTO log_watch (turn_id, repo_id, owner_id, text, impact, status, done_at, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
-            .bind(tid).bind(rid).bind(account).bind(text).bind(impact).bind(o.map(|w| w.1.as_str()).unwrap_or("open")).bind(o.and_then(|w| w.2)).bind(ended).execute(&mut *tx).await?;
+        match old_w.iter().find(|w| &w.1 == text) {
+            Some(o) => sqlx::query("UPDATE log_watch SET impact=$2 WHERE id=$1").bind(o.0).bind(impact).execute(&mut *tx).await?,
+            None => sqlx::query("INSERT INTO log_watch (turn_id, repo_id, owner_id, text, impact, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
+                .bind(tid).bind(rid).bind(account).bind(text).bind(impact).bind(ended).execute(&mut *tx).await?,
+        };
     }
     for (text, why, alt) in &decisions {
-        let o = old_d.iter().find(|d| &d.0 == text);
-        sqlx::query("INSERT INTO log_decisions (turn_id, repo_id, owner_id, text, why, alternative, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
-            .bind(tid).bind(rid).bind(account).bind(text).bind(why).bind(alt).bind(o.map(|d| d.1.as_str()).unwrap_or("active")).bind(ended).execute(&mut *tx).await?;
+        match old_d.iter().find(|d| &d.1 == text) {
+            Some(o) => sqlx::query("UPDATE log_decisions SET why=$2, alternative=$3 WHERE id=$1").bind(o.0).bind(why).bind(alt).execute(&mut *tx).await?,
+            None => sqlx::query("INSERT INTO log_decisions (turn_id, repo_id, owner_id, text, why, alternative, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+                .bind(tid).bind(rid).bind(account).bind(text).bind(why).bind(alt).bind(ended).execute(&mut *tx).await?,
+        };
     }
     reindex(&mut *tx, tid).await?;
     tx.commit().await?;
@@ -483,7 +553,7 @@ struct PulseRow {
 async fn worker_stats(app: &AppInner, owner: &str, since: DateTime<Utc>) -> Result<Value, Fail> {
     let (written, tokens, cost): (i64, i64, f64) = sqlx::query_as("SELECT count(*), COALESCE(sum(summary_tokens),0)::bigint, COALESCE(sum(summary_cost),0)::float8
         FROM log_turns WHERE owner_id=$1 AND summary_status='done' AND summary_at >= $2").bind(owner).bind(since).fetch_one(&app.db).await?;
-    let (queued, running, failed): (i64, i64, i64) = sqlx::query_as("SELECT count(*) FILTER (WHERE summary_status IN ('queued','running')), count(*) FILTER (WHERE summary_status='running'),
+    let (queued, running, failed): (i64, i64, i64) = sqlx::query_as("SELECT count(*) FILTER (WHERE summary_status='queued'), count(*) FILTER (WHERE summary_status='running'),
         count(*) FILTER (WHERE summary_status='failed') FROM log_turns WHERE owner_id=$1").bind(owner).fetch_one(&app.db).await?;
     let median: Option<f64> = sqlx::query_scalar("SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM summary_at - ended_at))::float8 FROM log_turns
         WHERE owner_id=$1 AND summary_status='done' AND summary_at >= $2 AND summary_at - ended_at BETWEEN interval '0' AND interval '1 day'").bind(owner).bind(since).fetch_one(&app.db).await?;
@@ -491,7 +561,7 @@ async fn worker_stats(app: &AppInner, owner: &str, since: DateTime<Utc>) -> Resu
 }
 
 /// The overview: totals, bars, each day's work per project, what needs attention.
-pub async fn pulse(app: &AppInner, owner: &str, range: &str, tz: i32) -> Result<Value, Fail> {
+pub async fn pulse(app: &AppInner, owner: &str, range: &str, tz: Zone) -> Result<Value, Fail> {
     let since = since_for(range, tz);
     let repos = repos_of(app, owner).await?;
     let turns = sqlx::query_as::<_, PulseRow>("SELECT t.id, t.repo_id, t.agent, t.started_at, t.ended_at, t.duration_ms, t.in_tok, t.out_tok, t.cache_read, t.cache_write, t.cost,
@@ -510,20 +580,35 @@ pub async fn pulse(app: &AppInner, owner: &str, range: &str, tz: i32) -> Result<
         "cache_share": if input_all > 0 { turns.iter().map(|t| t.cache_read).sum::<i64>() as f64 / input_all as f64 } else { 0.0 },
         "cost": turns.iter().filter_map(|t| t.cost).sum::<f64>(), "priced": turns.iter().filter(|t| t.cost.is_some()).count(), "by_agent": by_agent});
     // bars: hours for today, days otherwise; tokens per agent
-    let off = offset(tz);
     let mut bars: Vec<Value> = vec![];
     if range == "today" {
         for h in 0..24 {
             bars.push(json!({"label": format!("{h:02}"), "claude": 0, "codex": 0}));
         }
         for t in &turns {
-            let h = t.started_at.with_timezone(&off).hour() as usize;
+            let h = tz.at(&t.started_at).hour() as usize;
             let k = if t.agent == "codex" { "codex" } else { "claude" };
             bars[h][k] = json!(bars[h][k].as_i64().unwrap_or(0) + tok(t));
         }
+    } else if range == "all" {
+        // one bar per month, from the first turn (at most 24)
+        let today = tz.at(&now()).date_naive();
+        let first = turns.iter().map(|t| t.started_at).min().map(|d| tz.at(&d).date_naive()).unwrap_or(today);
+        let months = ((today.year() - first.year()) * 12 + today.month() as i32 - first.month() as i32).clamp(0, 23);
+        for i in (0..=months).rev() {
+            let m = today.with_day(1).unwrap() - chrono::Months::new(i as u32);
+            bars.push(json!({"label": m.format("%b").to_string(), "day": m.format("%Y-%m").to_string(), "claude": 0, "codex": 0}));
+        }
+        for t in &turns {
+            let month = &local_day(&t.started_at, tz)[..7];
+            if let Some(b) = bars.iter_mut().find(|b| b["day"] == month) {
+                let k = if t.agent == "codex" { "codex" } else { "claude" };
+                b[k] = json!(b[k].as_i64().unwrap_or(0) + tok(t));
+            }
+        }
     } else {
         let days = if range == "month" { 30 } else { 7 };
-        let today = now().with_timezone(&off).date_naive();
+        let today = tz.at(&now()).date_naive();
         for i in (0..days).rev() {
             let d = today - Duration::days(i);
             bars.push(json!({"label": if days > 7 { d.format("%-d").to_string() } else { d.format("%a").to_string() }, "day": d.format("%Y-%m-%d").to_string(), "claude": 0, "codex": 0}));
@@ -583,7 +668,7 @@ pub async fn pulse(app: &AppInner, owner: &str, range: &str, tz: i32) -> Result<
         "active": active.iter().map(|a| json!({"agent": a.0, "session_id": a.1, "machine": a.2, "last_at": a.3, "project_id": a.4, "project": repos.get(&a.4).map(|r| r.label().to_string())})).collect::<Vec<_>>()}))
 }
 
-pub async fn repos_list(app: &AppInner, owner: &str, range: &str, tz: i32) -> Result<Value, Fail> {
+pub async fn repos_list(app: &AppInner, owner: &str, range: &str, tz: Zone) -> Result<Value, Fail> {
     let since = since_for(range, tz);
     let repos = repos_of(app, owner).await?;
     let rows: Vec<(i64, Option<DateTime<Utc>>, i64, i64, f64, i64, i64, Vec<String>)> = sqlx::query_as("SELECT r.id,
@@ -618,14 +703,16 @@ const DEC_COLS: &str = "d.id, d.turn_id, d.text, d.why, d.alternative, d.status,
 const WATCH_COLS: &str = "w.id, w.turn_id, w.text, w.impact, w.status, w.done_at, w.created_at, t.agent";
 
 /// One project: its turns (with their notes), decisions, watch items and sessions.
-pub async fn repo_detail(app: &AppInner, owner: &str, id: i64, range: &str, tz: i32, agent: Option<&str>, only: Option<&str>) -> Result<Value, Fail> {
+pub async fn repo_detail(app: &AppInner, owner: &str, id: i64, range: &str, tz: Zone, agent: Option<&str>, only: Option<&str>) -> Result<Value, Fail> {
     let r = owned_repo(app, owner, id).await?;
     let since = since_for(range, tz);
     let (first_at, last_at, total): (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i64) = sqlx::query_as("SELECT min(started_at), max(ended_at), count(*) FROM log_turns WHERE repo_id=$1").bind(id).fetch_one(&app.db).await?;
     let machines: Vec<(String, i64)> = sqlx::query_as("SELECT machine_name, count(*) FROM log_turns WHERE repo_id=$1 GROUP BY 1 ORDER BY 2 DESC").bind(id).fetch_all(&app.db).await?;
     let agent = agent.filter(|a| !a.is_empty() && *a != "all");
-    let turns = sqlx::query_as::<_, TurnRow>(&format!("SELECT {TURN_COLS} FROM log_turns WHERE repo_id=$1 AND started_at >= $2 AND ($3::text IS NULL OR agent=$3) ORDER BY started_at DESC LIMIT 500"))
-        .bind(id).bind(since).bind(agent).fetch_all(&app.db).await?;
+    let turns = sqlx::query_as::<_, TurnRow>(&format!("SELECT {TURN_COLS} FROM log_turns WHERE repo_id=$1 AND started_at >= $2 AND ($3::text IS NULL OR agent=$3)
+        AND (NOT $4 OR EXISTS (SELECT 1 FROM log_decisions d WHERE d.turn_id=log_turns.id AND d.status <> 'dismissed') OR EXISTS (SELECT 1 FROM log_watch w WHERE w.turn_id=log_turns.id))
+        ORDER BY started_at DESC LIMIT 500"))
+        .bind(id).bind(since).bind(agent).bind(only == Some("notes")).fetch_all(&app.db).await?;
     let ids: Vec<i64> = turns.iter().map(|t| t.id).collect();
     let notes_d: Vec<(i64, i64, String, String)> = sqlx::query_as("SELECT id, turn_id, text, status FROM log_decisions WHERE turn_id = ANY($1) AND status <> 'dismissed'").bind(&ids).fetch_all(&app.db).await?;
     let notes_w: Vec<(i64, i64, String, String, String)> = sqlx::query_as("SELECT id, turn_id, text, impact, status FROM log_watch WHERE turn_id = ANY($1)").bind(&ids).fetch_all(&app.db).await?;
@@ -641,12 +728,15 @@ pub async fn repo_detail(app: &AppInner, owner: &str, id: i64, range: &str, tz: 
         v["notes"] = json!(notes);
         Some(v)
     }).collect();
-    let all: Vec<(i64, i64, Option<f64>, DateTime<Utc>)> = sqlx::query_as("SELECT duration_ms, in_tok+out_tok+cache_read+cache_write, cost, started_at FROM log_turns WHERE repo_id=$1 AND started_at >= $2")
-        .bind(id).bind(since).fetch_all(&app.db).await?;
+    let all: Vec<(i64, i64, Option<f64>, DateTime<Utc>)> = sqlx::query_as("SELECT duration_ms, in_tok+out_tok+cache_read+cache_write, cost, started_at FROM log_turns WHERE repo_id=$1 AND started_at >= $2 AND ($3::text IS NULL OR agent=$3)")
+        .bind(id).bind(since).bind(agent).fetch_all(&app.db).await?;
     let totals = json!({"turns": all.len(), "agent_ms": all.iter().map(|t| t.0).sum::<i64>(), "tokens": all.iter().map(|t| t.1).sum::<i64>(), "cost": all.iter().filter_map(|t| t.2).sum::<f64>()});
-    let mut hist = vec![0i64; match range { "today" => 24, "month" => 30, _ => 7 }];
+    // minutes of agent time per hour (today), per day (week, month) or per month (all: the last 24)
+    let mut hist = vec![0i64; match range { "today" | "all" => 24, "month" => 30, _ => 7 }];
+    let this_month = { let d = tz.at(&now()); d.year() * 12 + d.month() as i32 };
     for t in &all {
-        let i = if range == "today" { t.3.with_timezone(&offset(tz)).hour() as i64 } else { (t.3 - since).num_days() };
+        let l = tz.at(&t.3);
+        let i = match range { "today" => l.hour() as i64, "all" => 23 - (this_month - (l.year() * 12 + l.month() as i32)) as i64, _ => (l.date_naive() - tz.at(&since).date_naive()).num_days() };
         if i >= 0 && (i as usize) < hist.len() {
             hist[i as usize] += (t.0 as f64 / 60000.0).round() as i64;
         }
@@ -799,12 +889,11 @@ pub async fn resummarize(app: &AppInner, owner: &str, id: i64) -> Result<(), Fai
 pub async fn retry_failed(app: &AppInner, owner: &str) -> Result<Value, Fail> {
     let ms: Vec<(String, i64)> = sqlx::query_as("SELECT machine_id, count(*) FROM log_turns WHERE owner_id=$1 AND summary_status='failed' GROUP BY 1").bind(owner).fetch_all(&app.db).await?;
     let (mut retried, mut offline) = (0, 0);
+    // The relay reports each job it queues again (POST /relay/log/summary); a turn it no longer has stays failed.
     for (m, n) in ms {
-        if app.rpc(&m, "retry_failed", json!({}), 10).await.is_ok() {
-            sqlx::query("UPDATE log_turns SET summary_status='queued', summary_error='' WHERE owner_id=$1 AND machine_id=$2 AND summary_status='failed'").bind(owner).bind(&m).execute(&app.db).await?;
-            retried += n;
-        } else {
-            offline += n;
+        match app.rpc(&m, "retry_failed", json!({}), 10).await {
+            Ok(v) => retried += v["retried"].as_i64().unwrap_or(0),
+            Err(_) => offline += n,
         }
     }
     app.changed(owner);
@@ -844,7 +933,12 @@ pub async fn agents(app: &AppInner, owner: &str, files_base: &str) -> Result<Val
     for (mid, mname, panes) in ms.iter().filter(|m| app.machine_online(&m.0)) {
         for p in serde_json::from_value::<Vec<Pane>>(panes.clone()).unwrap_or_default().into_iter().filter(|p| !p.agent.is_empty()) {
             let since = app.since.lock().unwrap().get(&format!("{mid} {}", p.pane_id)).map(|x| x.1);
-            let repo = repos.iter().filter(|r| !r.root.is_empty() && (p.cwd == r.root || p.cwd.starts_with(&format!("{}/", r.root)))).max_by_key(|r| r.root.len());
+            // the pane's own session names its repo; else its folder (a root is the last Mac's that uploaded)
+            let by_session: Option<i64> = if p.agent_session.is_empty() { None } else {
+                sqlx::query_scalar("SELECT repo_id FROM log_turns WHERE owner_id=$1 AND session_id=$2 ORDER BY ended_at DESC LIMIT 1").bind(owner).bind(&p.agent_session).fetch_optional(&app.db).await?
+            };
+            let repo = by_session.and_then(|id| repos.iter().find(|r| r.id == id))
+                .or_else(|| repos.iter().filter(|r| !r.root.is_empty() && (p.cwd == r.root || p.cwd.starts_with(&format!("{}/", r.root)))).max_by_key(|r| r.root.len()));
             let mut a = json!({"machine_id": mid, "machine": mname, "pane_id": p.pane_id, "agent": p.agent, "status": p.status, "title": if p.title.is_empty() { &p.agent } else { &p.title },
                 "cwd": p.cwd, "workspace": p.workspace, "session_id": if p.agent_session.is_empty() { Value::Null } else { json!(p.agent_session) }, "since": since,
                 "project": projects.iter().find(|x| &x.machine_id == mid && x.pane_id == p.pane_id).map(|x| crate::appapi::project_json(app, x)),
@@ -863,8 +957,8 @@ pub async fn agents(app: &AppInner, owner: &str, files_base: &str) -> Result<Val
                 }
             }
             if matches!(p.status.as_str(), "done" | "idle" | "blocked") && !p.agent_session.is_empty() {
-                let t: Option<(i64, String, String, DateTime<Utc>)> = sqlx::query_as("SELECT id, headline, final_text, ended_at FROM log_turns WHERE owner_id=$1 AND session_id=$2 ORDER BY started_at DESC LIMIT 1")
-                    .bind(owner).bind(&p.agent_session).fetch_optional(&app.db).await?;
+                let t: Option<(i64, String, String, DateTime<Utc>)> = sqlx::query_as("SELECT id, headline, final_text, ended_at FROM log_turns WHERE owner_id=$1 AND session_id=$2 AND agent=$3 ORDER BY started_at DESC LIMIT 1")
+                    .bind(owner).bind(&p.agent_session).bind(if p.agent == "codex" { "codex" } else { "claude" }).fetch_optional(&app.db).await?;
                 if let Some((id, headline, text, ended)) = t.filter(|t| !t.2.is_empty()) {
                     let cut = text.char_indices().rev().nth(3999).map(|(i, _)| i);
                     let shown = match cut { Some(i) if i > 0 => format!("…{}", &text[i..]), _ => text.clone() };
@@ -919,11 +1013,15 @@ pub async fn ask_file(app: &AppInner, owner: &str, machine: &str, pane: &str, n:
 
 // ---------- app API (/api/v1) ----------
 
+fn zone(q: &ListQ) -> Zone {
+    Zone::parse(q.tz.as_deref().unwrap_or("0"))
+}
+
 #[derive(Deserialize, Default)]
 pub struct ListQ {
     pub range: Option<String>,
     #[serde(default)]
-    pub tz: i32,
+    pub tz: Option<String>,
     pub agent: Option<String>,
     pub only: Option<String>,
     pub q: Option<String>,
@@ -931,17 +1029,17 @@ pub struct ListQ {
 
 pub async fn api_pulse(State(app): State<App>, headers: HeaderMap, Query(q): Query<ListQ>) -> Result<Json<Value>, Fail> {
     let aid = bearer(&app, &headers).await?;
-    Ok(Json(pulse(&app, &aid, norm_range(q.range.as_deref()), q.tz).await?))
+    Ok(Json(pulse(&app, &aid, norm_range(q.range.as_deref()), zone(&q)).await?))
 }
 
 pub async fn api_repos(State(app): State<App>, headers: HeaderMap, Query(q): Query<ListQ>) -> Result<Json<Value>, Fail> {
     let aid = bearer(&app, &headers).await?;
-    Ok(Json(repos_list(&app, &aid, norm_range(q.range.as_deref()), q.tz).await?))
+    Ok(Json(repos_list(&app, &aid, norm_range(q.range.as_deref()), zone(&q)).await?))
 }
 
 pub async fn api_repo(State(app): State<App>, headers: HeaderMap, Path(id): Path<i64>, Query(q): Query<ListQ>) -> Result<Json<Value>, Fail> {
     let aid = bearer(&app, &headers).await?;
-    Ok(Json(repo_detail(&app, &aid, id, norm_range(q.range.as_deref()), q.tz, q.agent.as_deref(), q.only.as_deref()).await?))
+    Ok(Json(repo_detail(&app, &aid, id, norm_range(q.range.as_deref()), zone(&q), q.agent.as_deref(), q.only.as_deref()).await?))
 }
 
 #[derive(Deserialize)]
@@ -1057,7 +1155,11 @@ mod tests {
         assert!((c - (0.003 + 0.015 + 0.0003)).abs() < 1e-9, "{c}");
         assert!(cost_of("unknown-model", &Tokens::default()).is_none());
         // a day starts at the reader's midnight
-        let s = since_for("today", 120);
-        assert_eq!(s.with_timezone(&offset(120)).hour(), 0);
+        let s = since_for("today", Zone::Minutes(120));
+        assert_eq!(Zone::Minutes(120).at(&s).hour(), 0);
+        // a named zone takes the offset of each date: Amsterdam is +1 in winter, +2 in summer
+        let z = Zone::parse("Europe/Amsterdam");
+        assert_eq!(z.at(&"2026-01-15T12:00:00Z".parse().unwrap()).hour(), 13);
+        assert_eq!(z.at(&"2026-07-15T12:00:00Z".parse().unwrap()).hour(), 14);
     }
 }

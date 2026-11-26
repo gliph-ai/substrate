@@ -1,8 +1,17 @@
 // Substrate's only script: live refresh, copy buttons, confirmations.
 // The pages work without it.
 
-// The work log draws days in the reader's time zone: tell the server the offset.
-try { document.cookie = "tz=" + -new Date().getTimezoneOffset() + "; path=/; max-age=31536000; samesite=lax"; } catch (e) {}
+// The work log draws days in the reader's time zone: tell the server its name. A Log or
+// Agents page drawn before the server knew it (the first visit, or after a move) draws again once.
+try {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || String(-new Date().getTimezoneOffset());
+  const had = (document.cookie.match(/(?:^|; )tz=([^;]*)/) || [])[1];
+  document.cookie = "tz=" + encodeURIComponent(zone) + "; path=/; max-age=31536000; samesite=lax";
+  if (had !== encodeURIComponent(zone) && /^\/(log|agents)(\/|$)/.test(location.pathname) && sessionStorage.getItem("tz-reload") !== zone) {
+    sessionStorage.setItem("tz-reload", zone); // once per zone: a later move draws again too
+    location.reload();
+  }
+} catch (e) {}
 
 // Live: a page with data-live="/path" listens for server-sent events and
 // reloads its <main> when something changes, unless the reader is typing.
@@ -15,7 +24,8 @@ try { document.cookie = "tz=" + -new Date().getTimezoneOffset() + "; path=/; max
     if (busy) return;
     const a = document.activeElement;
     // Not while the reader types or holds an unsent edit; catch up once they close it.
-    if ((a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT")) || document.querySelector("details.edit[open]")) { missed = true; return; }
+    // A form with a choice made but not sent (an agent's answer, a checkbox) holds too.
+    if ((a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT")) || document.querySelector("details.edit[open], main form[data-dirty]")) { missed = true; return; }
     missed = false;
     busy = true;
     try {
@@ -31,6 +41,13 @@ try { document.cookie = "tz=" + -new Date().getTimezoneOffset() + "; path=/; max
     }
   };
   es.onmessage = refresh;
+  // dirty while any field differs from how the page drew it; back as drawn, a missed refresh runs
+  const dirty = (f) => [...f.elements].some((x) => x.tagName === "SELECT" ? [...x.options].some((o) => o.selected !== o.defaultSelected)
+    : (x.type === "checkbox" || x.type === "radio") ? x.checked !== x.defaultChecked : ("defaultValue" in x && x.value !== x.defaultValue));
+  const mark = (e) => { const f = e.target.form; if (!f) return; f.toggleAttribute("data-dirty", dirty(f)); if (missed && !document.querySelector("main form[data-dirty]")) setTimeout(refresh, 0); };
+  document.addEventListener("change", mark, true);
+  document.addEventListener("input", mark, true);
+  document.addEventListener("reset", (e) => setTimeout(() => mark({ target: { form: e.target } }), 0), true);
   document.addEventListener("toggle", (e) => { if (missed && e.target.matches && e.target.matches("details.edit") && !e.target.open) refresh(); }, true);
   document.addEventListener("focusout", () => { if (missed) setTimeout(refresh, 0); });
 })();
