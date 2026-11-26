@@ -121,6 +121,8 @@ fn message_json(app: &AppInner, m: &Message, projects: &[Project], with_prompt: 
     let p = projects.iter().find(|p| p.id == m.project_id);
     let mut v = json!({
         "id": m.id, "conversation_id": m.conversation_id, "kind": m.kind, "text": m.text, "stage": m.stage,
+        // The agent stopped without a final reply: the request is not in progress any more.
+        "agent_stopped": m.agent_idle && matches!(m.stage.as_str(), "submitted" | "working"),
         "deploy_stage": if m.deploy_stage.is_empty() { Value::Null } else { json!(m.deploy_stage) },
         "deploy_allow": m.deploy_allow, "risk": m.risk, "client": m.client_name,
         "hold_why": if m.hold_why.is_empty() || m.stage != "held" { Value::Null } else { json!(m.hold_why) },
@@ -136,8 +138,14 @@ fn message_json(app: &AppInner, m: &Message, projects: &[Project], with_prompt: 
     v
 }
 
-const ACTIVE: &str = "m.stage IN ('approved','dispatched','accepted','submitted','working','awaiting_sender')
+/// With the agent, waiting on a tester's answer, or still on its way to production. An agent that
+/// stopped without a final reply is not working on it any more: that message goes to history.
+pub(crate) const ACTIVE: &str = "m.stage IN ('approved','dispatched','accepted','awaiting_sender')
+    OR (m.stage IN ('submitted','working') AND NOT m.agent_idle)
     OR m.deploy_stage IN ('committing','running_checks','pushing','fix_committed','ci_running','ci_passed','deploying','deployed')";
+
+pub(crate) const HISTORY: &str = "m.stage IN ('completed','rejected','cancelled','expired','failed','interrupted','uncertain','answered')
+    OR (m.stage IN ('submitted','working') AND m.agent_idle)";
 
 /// GET /api/v1/dashboard: what waits for you, what is with an agent, what finished.
 pub async fn dashboard(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>, Fail> {
@@ -146,7 +154,7 @@ pub async fn dashboard(State(app): State<App>, headers: HeaderMap) -> Result<Jso
     let q = |w: &str, lim: i64| format!("SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND ({w}) ORDER BY m.updated_at DESC LIMIT {lim}");
     let waiting = sqlx::query_as::<_, Message>(&q("m.stage IN ('pending_approval','held','reviewing')", 100)).bind(&aid).fetch_all(&app.db).await?;
     let active = sqlx::query_as::<_, Message>(&q(ACTIVE, 30)).bind(&aid).fetch_all(&app.db).await?;
-    let history = sqlx::query_as::<_, Message>(&q(&format!("m.stage IN ('completed','rejected','cancelled','expired','failed','interrupted','uncertain','answered') AND NOT ({ACTIVE})"), 25))
+    let history = sqlx::query_as::<_, Message>(&q(&format!("({HISTORY}) AND NOT ({ACTIVE})"), 25))
         .bind(&aid).fetch_all(&app.db).await?;
     let ms: Vec<(String, Value)> = sqlx::query_as("SELECT id, panes FROM machines WHERE account_id=$1 AND NOT revoked").bind(&aid).fetch_all(&app.db).await?;
     let agents: Vec<&Value> = ms.iter().filter(|m| app.machine_online(&m.0)).flat_map(|m| m.1.as_array().into_iter().flatten()).filter(|p| !p["agent"].as_str().unwrap_or("").is_empty()).collect();
@@ -256,7 +264,7 @@ pub async fn session(State(app): State<App>, headers: HeaderMap, Path(sid): Path
         .bind(&sid).bind(&aid).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(404, "no such session"))?;
     let mut v = session_json(&app, &s, &projects).await?;
     let (sent, active, done, shipped): (i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE kind <> 'answer'), count(*) FILTER (WHERE stage IN ('approved','dispatched','accepted','submitted','working','awaiting_sender')),
+        "SELECT count(*) FILTER (WHERE kind <> 'answer'), count(*) FILTER (WHERE stage IN ('approved','dispatched','accepted','awaiting_sender') OR (stage IN ('submitted','working') AND NOT agent_idle)),
                 count(*) FILTER (WHERE stage = 'completed'), count(*) FILTER (WHERE deploy_stage IN ('deployed','verified','ready_to_retest'))
          FROM messages WHERE sender_id=$1",
     ).bind(&s.account_id).fetch_one(&app.db).await?;

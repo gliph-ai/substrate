@@ -202,6 +202,7 @@ fn stage_tag(stage: &str) -> Markup {
         "approved" => ("", "queued"),
         "dispatched" | "accepted" => ("", "with the relay"),
         "submitted" | "working" => ("ok", "agent working"),
+        "stopped" => ("warn", "stopped, no reply"),
         "awaiting_sender" => ("warn", "question for the tester"),
         "answered" => ("", "answered"),
         "completed" => ("ok", "done"),
@@ -554,7 +555,7 @@ fn request_row(m: &Message, projects: &[Project]) -> Markup {
             }
             span.r.row {
                 @if !m.deploy_stage.is_empty() && m.deploy_stage != "not_deploying" { span.tag.blue { (m.deploy_stage.replace('_', " ")) } }
-                (stage_tag(&m.stage))
+                (stage_tag(if m.agent_idle && matches!(m.stage.as_str(), "submitted" | "working") { "stopped" } else { &m.stage }))
                 span.chev { (ic("arrow-right")) }
             }
         }
@@ -569,15 +570,12 @@ async fn dashboard(app: &AppInner, a: &Account) -> Result<Html<String>, Fail> {
     let approvals = sqlx::query_as::<_, Message>(
         "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('pending_approval','held','reviewing') ORDER BY m.sender_id, m.order_n",
     ).bind(&a.id).fetch_all(&app.db).await?;
-    // Active: with the agent, waiting on a tester's answer, or still on its way to production.
-    let active = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND (m.stage IN ('approved','dispatched','accepted','submitted','working','awaiting_sender')
-           OR m.deploy_stage IN ('committing','running_checks','pushing','fix_committed','ci_running','ci_passed','deploying','deployed')) ORDER BY m.updated_at DESC LIMIT 30",
-    ).bind(&a.id).fetch_all(&app.db).await?;
-    let history = sqlx::query_as::<_, Message>(
-        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage IN ('completed','rejected','cancelled','expired','failed','interrupted','uncertain','answered')
-           AND m.deploy_stage NOT IN ('committing','running_checks','pushing','fix_committed','ci_running','ci_passed','deploying','deployed') ORDER BY m.updated_at DESC LIMIT 25",
-    ).bind(&a.id).fetch_all(&app.db).await?;
+    let active = sqlx::query_as::<_, Message>(&format!(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND ({}) ORDER BY m.updated_at DESC LIMIT 30", crate::appapi::ACTIVE,
+    )).bind(&a.id).fetch_all(&app.db).await?;
+    let history = sqlx::query_as::<_, Message>(&format!(
+        "SELECT m.* FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND ({}) AND NOT ({}) ORDER BY m.updated_at DESC LIMIT 25", crate::appapi::HISTORY, crate::appapi::ACTIVE,
+    )).bind(&a.id).fetch_all(&app.db).await?;
     let hour = now().format("%H").to_string().parse::<u32>().unwrap_or(12);
     let greet = match hour { 5..=11 => "Good morning,", 12..=17 => "Good afternoon,", _ => "Good evening," };
     let queued: Vec<(String, i64)> = sqlx::query_as("SELECT m.project_id, count(*) FROM messages m JOIN projects p ON p.id=m.project_id WHERE p.owner_id=$1 AND m.stage = ANY($2) GROUP BY 1")
@@ -668,7 +666,7 @@ pub async fn project_page(State(app): State<App>, User(a): User, Path(pid): Path
     let p = domain::project(&app, &pid).await?;
     let owner = p.owner_id == a.id;
     let convs: Vec<(String, String, DateTime<Utc>, String, String, String, String)> = sqlx::query_as(
-        "SELECT c.id, c.title, c.updated_at, COALESCE(m.stage,''), COALESCE(m.sender_label,''), COALESCE(m.client_name,''), COALESCE(m.deploy_stage,'')
+        "SELECT c.id, c.title, c.updated_at, CASE WHEN m.agent_idle AND m.stage IN ('submitted','working') THEN 'stopped' ELSE COALESCE(m.stage,'') END, COALESCE(m.sender_label,''), COALESCE(m.client_name,''), COALESCE(m.deploy_stage,'')
          FROM conversations c LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=c.id ORDER BY order_n DESC LIMIT 1) m ON true
          WHERE c.project_id=$1 AND ($2 OR c.sender_id=$3) ORDER BY c.updated_at DESC LIMIT 50",
     ).bind(&pid).bind(owner).bind(&a.id).fetch_all(&app.db).await?;

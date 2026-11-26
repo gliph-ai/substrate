@@ -57,7 +57,9 @@ Creating and revoking sessions stay on the web: open `new_session_url` or a sess
 
 **Message**: `id`, `conversation_id`, `kind` (feedback, question, task, answer), `text`, `stage`
 (pending_approval, held, reviewing, approved, dispatched, accepted, submitted, working, awaiting_sender,
-completed, rejected, cancelled, expired, failed, interrupted, uncertain), `deploy_stage` (null or
+completed, rejected, cancelled, expired, failed, interrupted, uncertain), `agent_stopped` (true when
+the stage is submitted or working and the agent stopped without a final reply; such a message is in
+history), `deploy_stage` (null or
 committing, running_checks, pushing, fix_committed, ci_running, ci_passed, ci_failed, deploying,
 deployed, deploy_failed, verified, ready_to_retest, not_deploying, unknown), `deploy_allow`
 (none, test, production), `risk` (comma-separated flags; non-empty means held), `proposal` (null, or

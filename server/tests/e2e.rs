@@ -826,6 +826,14 @@ async fn app_api_code_sign_in_and_dashboard() {
     let r: Value = t.http.post(api(&format!("/messages/{mid}/approve"))).bearer_auth(&tok).send().await.unwrap().json().await.unwrap();
     assert_eq!(r["stage"], "approved");
     assert_eq!(get(api("/dashboard")).await["counts"]["waiting"], 0);
+    // An agent that stopped without a final reply is not working on it: history, not active.
+    sqlx::query("UPDATE messages SET stage='working', agent_idle=true WHERE id=$1").bind(&mid).execute(&t.app.db).await.unwrap();
+    let d2 = get(api("/dashboard")).await;
+    assert_eq!(d2["counts"]["active"], 0, "{d2}");
+    assert_eq!(d2["history"][0]["id"], mid.as_str(), "{d2}");
+    assert_eq!(d2["history"][0]["agent_stopped"], true, "{d2}");
+    let page = t.http.get(format!("{}/", t.base)).header("cookie", &w.dev.cookie).send().await.unwrap().text().await.unwrap();
+    assert!(page.contains("stopped, no reply") && page.contains("Nothing is with an agent right now."), "web dashboard");
     let cid = d["waiting"][0]["conversation_id"].as_str().unwrap().to_string();
     let c = get(api(&format!("/conversations/{cid}"))).await;
     assert!(c["events"].as_array().unwrap().len() >= 2, "{c}");
