@@ -18,6 +18,8 @@ pub mod push;
 pub mod relay;
 pub mod safety;
 pub mod web;
+pub mod worklog;
+pub mod logweb;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -146,6 +148,36 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/live", get(appapi::live))
         .route("/api/v1/devices", post(appapi::device_add))
         .route("/api/v1/devices/{token}", axum::routing::delete(appapi::device_remove))
+        .route("/api/v1/log/pulse", get(worklog::api_pulse))
+        .route("/api/v1/log/repos", get(worklog::api_repos))
+        .route("/api/v1/log/repos/{id}", get(worklog::api_repo).patch(worklog::api_repo_update))
+        .route("/api/v1/log/repos/{id}/icon", post(worklog::api_repo_icon))
+        .route("/api/v1/log/repos/{id}/export", get(worklog::api_export))
+        .route("/api/v1/log/turns/{id}", get(worklog::api_turn))
+        .route("/api/v1/log/turns/{id}/images/{n}", get(worklog::api_turn_image))
+        .route("/api/v1/log/turns/{id}/resummarize", post(worklog::api_resummarize))
+        .route("/api/v1/log/watch/{id}/{action}", post(worklog::api_watch))
+        .route("/api/v1/log/decisions/{id}/{action}", post(worklog::api_decision))
+        .route("/api/v1/log/jobs/retry-failed", post(worklog::api_retry_failed))
+        .route("/api/v1/log/search", get(worklog::api_search))
+        .route("/api/v1/agents", get(worklog::api_agents))
+        .route("/api/v1/agents/{machine}/{pane}/{action}", post(worklog::api_agent_action))
+        .route("/api/v1/agents/{machine}/{pane}/ask-files/{n}", get(worklog::api_ask_file))
+        .route("/log", get(logweb::pulse_page))
+        .route("/log/search", get(logweb::search_page))
+        .route("/log/repos/{id}", get(logweb::repo_page))
+        .route("/log/repos/{id}/icon", get(worklog::repo_icon))
+        .route("/log/repos/{id}/export", get(logweb::export))
+        .route("/log/repos/{id}/settings", post(logweb::repo_settings))
+        .route("/log/turns/{id}", get(logweb::turn_page))
+        .route("/log/turns/{id}/images/{n}", get(logweb::turn_image))
+        .route("/log/turns/{id}/resummarize", post(logweb::resummarize))
+        .route("/log/watch/{id}/{action}", post(logweb::watch_action))
+        .route("/log/decisions/{id}/{action}", post(logweb::decision_action))
+        .route("/log/jobs/retry-failed", post(logweb::retry_failed))
+        .route("/agents", get(logweb::agents_page))
+        .route("/agents/{machine}/{pane}/ask-files/{n}", get(logweb::ask_file))
+        .route("/agents/{machine}/{pane}/{action}", post(logweb::agent_action))
         .route("/chat", get(chat::page))
         .route("/chat/live", get(chat::live))
         .route("/mcp/{secret}/live", get(chat::link_live))
@@ -174,6 +206,9 @@ pub fn router(app: App) -> Router {
         .route("/relay/report", post(relay::report))
         .route("/relay/report/attachment", post(relay::report_attachment))
         .route("/relay/attachments/{aid}", get(relay::attachment_download))
+        .route("/relay/log/turns", post(worklog::ingest))
+        .route("/relay/log/summary", post(worklog::summary))
+        .route("/relay/log/icon", post(worklog::relay_icon))
         .route("/relay/api/whoami", get(relay::api_whoami))
         .route("/relay/api/logout", post(relay::api_logout))
         .route("/relay/api/projects", get(relay::api_projects))
@@ -201,6 +236,8 @@ pub async fn build(db: sqlx::PgPool, cfg: app::Config) -> anyhow::Result<App> {
         waiters: Mutex::new(HashMap::new()),
         limiter: app::Limiter::new(),
         gliph_out: Mutex::new(None),
+        pending: Mutex::new(HashMap::new()),
+        since: Mutex::new(HashMap::new()),
     }))
 }
 

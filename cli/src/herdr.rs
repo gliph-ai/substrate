@@ -1,7 +1,9 @@
 //! The Herdr adapter. Herdr owns the panes and knows what each agent is doing
 //! (idle, working, blocked at a permission prompt, done); `herdr agent prompt`
 //! bracketed-pastes text plus Enter as one submission and refuses an agent
-//! that is blocked. Substrate never starts, stops or answers an agent.
+//! that is blocked. Substrate never starts or stops an agent. It sends keys or a
+//! prompt of its own only when the account owner asks for it (the cloud's
+//! `agent_keys` and `agent_prompt` requests, to answer an agent from Sidra or the web).
 
 use std::process::Command;
 
@@ -15,6 +17,18 @@ pub trait Herdr: Send + Sync {
     /// at an approval or question dialog: nothing was typed.
     fn prompt(&self, pane: &str, text: &str) -> std::result::Result<(), PromptError>;
     fn read(&self, pane: &str, lines: u32) -> Result<String>;
+    /// Keys into a dialog (`herdr agent send-keys`).
+    fn send_keys(&self, _pane: &str, _keys: &[String]) -> Result<()> {
+        bail!("this Herdr cannot send keys")
+    }
+    /// What the pane shows now.
+    fn screen(&self, _pane: &str) -> Result<String> {
+        bail!("this Herdr cannot read the screen")
+    }
+    /// The agent's state now: idle, working, blocked, done or unknown.
+    fn status(&self, pane: &str) -> Result<String> {
+        self.list()?.into_iter().find(|p| p.pane_id == pane).map(|p| p.status).ok_or_else(|| anyhow::anyhow!("the agent is gone"))
+    }
 }
 
 #[derive(Debug)]
@@ -74,6 +88,7 @@ pub fn pane_from(a: &Value) -> Pane {
         cwd: a["cwd"].as_str().unwrap_or_default().into(),
         title: a["terminal_title_stripped"].as_str().unwrap_or_default().into(),
         workspace: a["workspace_id"].as_str().unwrap_or_default().into(),
+        live: None,
     }
 }
 
@@ -102,7 +117,29 @@ impl Herdr for Cli {
     }
 
     fn read(&self, pane: &str, lines: u32) -> Result<String> {
-        let out = Command::new(&self.bin).args(["agent", "read", pane, "--source", "recent-unwrapped", "--lines", &lines.to_string()]).output()?;
+        self.read_source(pane, &["--source", "recent-unwrapped", "--lines", &lines.to_string()])
+    }
+
+    fn send_keys(&self, pane: &str, keys: &[String]) -> Result<()> {
+        let out = Command::new(&self.bin).args(["agent", "send-keys", pane]).args(keys).output()?;
+        if !out.status.success() {
+            bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn screen(&self, pane: &str) -> Result<String> {
+        self.read_source(pane, &["--source", "visible"])
+    }
+
+    fn status(&self, pane: &str) -> Result<String> {
+        Ok(self.run(&["agent", "get", pane])?["result"]["agent"]["agent_status"].as_str().unwrap_or("unknown").to_string())
+    }
+}
+
+impl Cli {
+    fn read_source(&self, pane: &str, args: &[&str]) -> Result<String> {
+        let out = Command::new(&self.bin).args(["agent", "read", pane]).args(args).output()?;
         if !out.status.success() {
             bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
         }

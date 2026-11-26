@@ -9,7 +9,7 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use substrate_proto::CloudFrame;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::files::Files;
 use crate::mail::Mailer;
@@ -55,6 +55,10 @@ pub struct AppInner {
     pub limiter: Limiter,
     /// Lines for the Gliph plugin task to post: (channel id, text).
     pub gliph_out: Mutex<Option<mpsc::UnboundedSender<GliphOut>>>,
+    /// req_id → (the machine asked, where its `response` goes): requests to a relay in flight.
+    pub pending: Mutex<HashMap<String, (String, oneshot::Sender<(u16, serde_json::Value)>)>>,
+    /// "machine pane" → (status, since when): how long a live agent has been in its state.
+    pub since: Mutex<HashMap<String, (String, DateTime<Utc>)>>,
 }
 
 pub enum GliphOut {
@@ -86,6 +90,38 @@ impl AppInner {
     pub fn machine_online(&self, machine: &str) -> bool {
         !machine.is_empty() && self.hub.lock().unwrap().contains_key(machine)
     }
+    /// Ask a machine's relay for something only it has or can do (proto `CloudFrame::Request`).
+    /// A relay before 0.1.17 drops the frame, so silence ends in a clear error.
+    pub async fn rpc(&self, machine: &str, op: &str, args: serde_json::Value, secs: u64) -> Result<serde_json::Value, Fail> {
+        let name: String = sqlx::query_scalar("SELECT name FROM machines WHERE id=$1").bind(machine).fetch_optional(&self.db).await?.unwrap_or_else(|| "that Mac".into());
+        let req_id = id("rq");
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(req_id.clone(), (machine.to_string(), tx));
+        if !self.send_machine(machine, CloudFrame::Request { req_id: req_id.clone(), op: op.into(), args }) {
+            self.pending.lock().unwrap().remove(&req_id);
+            return Err(Fail::new(409, format!("{name} is offline. Its relay must be running for this.")));
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(secs), rx).await {
+            Ok(Ok((200, body))) => Ok(body),
+            Ok(Ok((st, body))) => {
+                let st = if (400..600).contains(&st) { st } else { 502 };
+                Err(Fail::new(st, proto_text(body["error"].as_str().unwrap_or("the relay refused it"))))
+            }
+            _ => {
+                self.pending.lock().unwrap().remove(&req_id);
+                Err(Fail::new(504, format!("The relay on {name} did not answer. Update it to 0.1.17 or later (substrate doctor), or check that it runs.")))
+            }
+        }
+    }
+    /// A relay's answer to `rpc`: only the machine that was asked can answer.
+    pub fn resolve(&self, machine: &str, req_id: &str, status: u16, body: serde_json::Value) {
+        let mut p = self.pending.lock().unwrap();
+        if p.get(req_id).map(|(m, _)| m == machine).unwrap_or(false) {
+            if let Some((_, tx)) = p.remove(req_id) {
+                let _ = tx.send((status, body));
+            }
+        }
+    }
     pub fn gliph(&self, o: GliphOut) {
         if let Some(tx) = self.gliph_out.lock().unwrap().as_ref() {
             let _ = tx.send(o);
@@ -102,6 +138,10 @@ impl AppInner {
         m.update(data.as_bytes());
         hex::decode(sig).map(|s| m.verify_slice(&s).is_ok()).unwrap_or(false)
     }
+}
+
+fn proto_text(s: &str) -> String {
+    substrate_proto::sanitize(s, 300)
 }
 
 /// A random secret, hex. 32 bytes unless asked.

@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let db = sqlx::postgres::PgPoolOptions::new().max_connections(10).connect(&std::env::var("DATABASE_URL")?).await?;
     let app = build(db, cfg).await?;
     gliph::spawn(app.clone());
+    substrate_server::worklog::spawn_prices(app.clone());
     {
         let app = app.clone();
         tokio::spawn(async move {

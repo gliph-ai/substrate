@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 struct FakeHerdr {
     panes: Mutex<Vec<Pane>>,
     prompts: Mutex<Vec<(String, String)>>,
+    keys: Mutex<Vec<(String, Vec<String>)>>,
 }
 
 impl FakeHerdr {
@@ -51,6 +52,13 @@ impl Herdr for FakeHerdr {
     }
     fn read(&self, _pane: &str, _lines: u32) -> Result<String> {
         Ok("…terminal tail…".into())
+    }
+    fn send_keys(&self, pane: &str, keys: &[String]) -> Result<()> {
+        self.keys.lock().unwrap().push((pane.into(), keys.to_vec()));
+        Ok(())
+    }
+    fn screen(&self, _pane: &str) -> Result<String> {
+        Ok(" Allow this?\n ❯ 1. Yes\n   2. No\n".into())
     }
 }
 
@@ -404,4 +412,27 @@ async fn a_held_followup_is_typed_again_once_approved() {
     tick(&h).await;
     let ps: Vec<String> = h.herdr.prompts().into_iter().map(|p| p.1).collect();
     assert_eq!(ps, vec!["check this", "do it"]);
+}
+
+#[tokio::test]
+async fn cloud_requests_answer_a_blocked_agent() {
+    let mut h = harness();
+    h.herdr.set("w1:p1", "s1", "blocked");
+    tick(&h).await;
+    // The blocked pane carries its dialog and the keys that pick each choice.
+    let live = drain(&mut h).into_iter().find_map(|f| match f { DaemonFrame::Panes { panes } => panes[0].live.clone(), _ => None }).expect("live view");
+    assert_eq!(live.options[1].keys, vec!["2".to_string()]);
+    h.relay.on_frame(CloudFrame::Request { req_id: "r1".into(), op: "agent_keys".into(), args: serde_json::json!({"pane_id": "w1:p1", "keys": ["2"]}) });
+    h.relay.on_frame(CloudFrame::Request { req_id: "r2".into(), op: "agent_keys".into(), args: serde_json::json!({"pane_id": "w1:p1", "keys": ["rm -rf"]}) });
+    h.relay.on_frame(CloudFrame::Request { req_id: "r3".into(), op: "agent_prompt".into(), args: serde_json::json!({"pane_id": "w1:p1", "text": "yes"}) });
+    h.relay.on_frame(CloudFrame::Request { req_id: "r4".into(), op: "turn_local".into(), args: serde_json::json!({"turn": {"agent": "claude", "session_id": "s1", "turn_key": "nope"}}) });
+    let mut got = std::collections::HashMap::new();
+    while got.len() < 4 {
+        if let Some(DaemonFrame::Response { req_id, status, .. }) = tokio::time::timeout(std::time::Duration::from_secs(5), h.rx.recv()).await.unwrap() {
+            got.insert(req_id, status);
+        }
+    }
+    assert_eq!((got["r1"], got["r2"], got["r3"], got["r4"]), (200, 400, 409, 404));
+    assert_eq!(h.herdr.keys.lock().unwrap().clone(), vec![("w1:p1".to_string(), vec!["2".to_string()])]);
+    assert!(h.herdr.prompts().is_empty(), "a dialog without a question gets keys, never a prompt");
 }

@@ -166,7 +166,7 @@ pub async fn machine_auth(app: &AppInner, headers: &HeaderMap) -> Result<(String
 
 pub async fn ws(State(app): State<App>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Result<Response, Fail> {
     let (account, machine) = machine_auth(&app, &headers).await?;
-    Ok(upgrade.max_message_size(1 << 20).on_upgrade(move |s| async move {
+    Ok(upgrade.max_message_size(8 << 20).on_upgrade(move |s| async move {
         if let Err(e) = session(app.clone(), s, account, machine.clone()).await {
             tracing::warn!(machine, error = %e.1, "relay session ended");
         }
@@ -248,6 +248,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
             sqlx::query("UPDATE machines SET version=$2, panes=$3, last_seen=now() WHERE id=$1")
                 .bind(machine).bind(proto::sanitize(&version, 32)).bind(sqlx::types::Json(&panes)).execute(&app.db).await?;
             domain::machine_presence(app, machine, true).await?;
+            crate::worklog::note_since(app, machine, &panes);
             // Welcome carries whatever this creates or moves.
             reconcile_panes(app, machine, &panes, false).await?;
             let _ = tx.send(CloudFrame::Welcome { machine_id: machine.to_string(), projects: bindings(app, machine).await? });
@@ -273,6 +274,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
         }
         DaemonFrame::Panes { panes } => {
             sqlx::query("UPDATE machines SET panes=$2, last_seen=now() WHERE id=$1").bind(machine).bind(sqlx::types::Json(&panes)).execute(&app.db).await?;
+            crate::worklog::note_since(app, machine, &panes);
             reconcile_panes(app, machine, &panes, true).await?;
             app.changed(account);
         }
@@ -336,6 +338,7 @@ async fn handle_frame(app: &AppInner, account: &str, machine: &str, tx: &mpsc::U
                 domain::pump(app, &p.id).await?;
             }
         }
+        DaemonFrame::Response { req_id, status, body } => app.resolve(machine, &req_id, status, body),
         DaemonFrame::Excerpt { message_id, text } => {
             sqlx::query("UPDATE messages m SET excerpt=$3 FROM projects p WHERE m.id=$1 AND p.id=m.project_id AND p.machine_id=$2")
                 .bind(&message_id).bind(machine).bind(proto::sanitize(&text, 8192)).execute(&app.db).await?;

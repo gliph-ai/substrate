@@ -72,6 +72,20 @@ impl Api {
         bail!("unauthorized")
     }
 
+    /// POST with the HTTP status in the answer, for callers that treat 4xx and 5xx apart.
+    pub async fn post_status(&self, path: &str, body: &Value) -> Result<(u16, Value)> {
+        for attempt in 0..2 {
+            let (tok, _) = self.access(attempt > 0).await?;
+            let r = self.http.post(format!("{}{path}", self.server)).json(body).bearer_auth(tok).send().await?;
+            let st = r.status().as_u16();
+            if st == 401 && attempt == 0 {
+                continue;
+            }
+            return Ok((st, r.json().await.unwrap_or(json!({}))));
+        }
+        Ok((401, json!({})))
+    }
+
     pub async fn upload(&self, message_id: &str, reply_token: &str, name: &str, bytes: Vec<u8>) -> Result<String> {
         let (tok, _) = self.access(false).await?;
         let r = self.http.post(format!("{}/relay/report/attachment", self.server))

@@ -2192,15 +2192,17 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "substrate"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "fs2",
  "futures-util",
  "hex",
  "rand 0.8.8",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -2213,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-proto"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "serde",
  "serde_json",
@@ -2222,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-server"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "axum",

@@ -82,3 +82,58 @@ approvals; null otherwise: draw the agent's, CI's or Substrate's mark).
 Deploy track steps, in order: Commit (committing), Checks (running_checks), Push (pushing),
 CI (fix_committed, ci_running, ci_passed, ci_failed), Deploy (deploying, deployed,
 deploy_failed), Live (verified, ready_to_retest).
+
+## Work log (`/api/v1/log`)
+
+The turns of Claude Code and Codex on your Macs, ported from Theasa. The shapes follow Theasa's API, so a screen
+built for it reads these. A **project** here is a git repo (`log_repos`), not a Herdr pane; ids are integers.
+Ranges are `range=today|week|month|all` (default week). Days and hours are the reader's: send `tz`, the minutes
+east of UTC (`-getTimezoneOffset()`). Each write ends with a `changed` on `/live`.
+
+The cloud keeps no diffs, images or tool log. A turn's `local` comes from the relay on the Mac that recorded it
+(`machine_id`); when that Mac is offline or its relay is older than 0.1.17, `local` is null and `local_error` says why.
+
+| Call | Answer |
+| --- | --- |
+| `GET /log/pulse?range&tz` | `{range, since, totals: {turns, agent_ms, tokens, cache_share, cost, priced, by_agent}, bars: [{label, day?, claude, codex}] (tokens; hours for today), days: [{day, items: [{project, turns, agents, last_at, health, pending, bullets: [{turn_id, text, verdict}], decisions, watch, files}]}], attention: [{id, text, impact, created_at, turn_id, project_id, project}], open_watch, decisions: [{id, text, created_at, turn_id, project_id, project}], decisions_count, worker: {written, tokens, cost, queued, running, failed, median_delay_s}, active: [{agent, session_id, machine, last_at, project_id, project}]}` |
+| `GET /log/repos?range&tz` | `[Project + {last_at, turns, tokens, cost, agent_ms, open_watch, machines}]` |
+| `GET /log/repos/{id}?range&tz&agent=claude\|codex&only=notes` | `{project, first_at, last_at, total_turns, machines: [{machine, n}], totals: {turns, agent_ms, tokens, cost}, hist: [minutes], turns: [Turn + {decisions, watch, notes: [{kind: decision\|watch, id, text, status, impact?}]}], decisions: [Decision], watch: [Watch], sessions: [{agent, session_id, machine, last_at, active}]}` |
+| `GET /log/repos/{id}/export` | the project, every turn with `final_text`, its decisions and `watch_items`, as a JSON download |
+| `PATCH /log/repos/{id}` `{name?, hidden?, icon_reset?}` | `{"ok": true}`. `name` "" goes back to the repo name; `icon_reset` lets the relay's logo replace an uploaded one. |
+| `POST /log/repos/{id}/icon` | multipart field `icon` (PNG, JPEG or WebP, under 1 MB); kept until `icon_reset` |
+| `GET /log/turns/{id}` | `{turn: Turn + {final_text, diffs: {path: text}}, attachments: [{id, dir, kind, name, url, media_type, count, image?, has_data, src}], project, decisions, watch, job: {status, model, tokens, cost, finished_at, error}, session: {index, count, first_at}, prev, next, resume, local: {log, diffs, images} \| null, local_error}` |
+| `GET /log/turns/{id}/images/{n}` | the image bytes (raster only), from the relay |
+| `POST /log/turns/{id}/resummarize` | `{"ok": true}`: the recording Mac writes the summary again. 409/504 when it is offline or too old. |
+| `POST /log/watch/{id}/done\|open` | `{"ok": true}` |
+| `POST /log/decisions/{id}/dismiss\|restore\|supersede` `{by?}` | `{"ok": true}`; `supersede` needs `by`, the id of the newer decision |
+| `POST /log/jobs/retry-failed` | `{retried, offline}`: failed summaries queued again on each online Mac |
+| `GET /log/search?q=` | `[{id, project_id, agent, started_at, headline, prompt, verdict, snippet, project}]`; `snippet` marks hits as `[[word]]`. Words match as prefixes. |
+
+**Project**: `id`, `key` (the normalised git remote, else the path), `name` (the shown name), `repo_name`, `root`,
+`remote`, `hidden`, `has_icon`, `icon_locked`, `icon_url` (public, or null: draw `initial`), `initial`.
+
+**Turn**: `id`, `agent` (claude, codex), `session_id`, `project_id`, `machine`, `machine_id`, `cwd`, `branch`, `head`,
+`started_at`, `ended_at`, `duration_ms`, `tool_ms`, `prompt`, `model`, `tokens` `{input, output, cache_read, cache_write}`,
+`model_calls`, `cost` (USD at API list prices, or null for an unknown model), `tools` `{name: count}`,
+`files` `[{path, add, del}]`, `headline`, `summary` [sentences], `verdict` (clean, watch, broken, or null),
+`steps` `[{at, title, text, tone}]`, `summary_status` (none, queued, running, done, failed, skipped), `summary_error`, `att_in`, `att_out`.
+
+**Decision**: `id`, `turn_id`, `text`, `why`, `alternative`, `status` (active, dismissed, superseded), `superseded_by`, `created_at`, `agent`.
+**Watch**: `id`, `turn_id`, `text`, `impact` (high, medium, low), `status` (open, done), `done_at`, `created_at`, `agent`.
+
+## Live agents (`/api/v1/agents`)
+
+Every agent on your online Macs, and what a blocked one asks. Only the account's owner can answer; each answer is in the audit log.
+
+| Call | Answer |
+| --- | --- |
+| `GET /agents` | `{available, error, agents: [Agent]}` |
+| `POST /agents/{machine_id}/{pane_id}/keys` `{keys}` | `{"ok": true}`. 1 to 10 keys: a digit, esc, enter, up, down, left, right, tab, space, y, n. |
+| `POST /agents/{machine_id}/{pane_id}/prompt` `{text}` | `{"ok": true}`. 1 to 20000 characters. The relay cancels an open AskUserQuestion first, so send the answers as the prompt. 409 while the agent works. |
+| `GET /agents/{machine_id}/{pane_id}/ask-files/{n}` | the image of `ask_extras.attachments[n]`, from the relay |
+
+**Agent**: `machine_id`, `machine`, `pane_id`, `agent`, `status` (blocked, done, idle, working, unknown), `title`, `cwd`,
+`workspace`, `session_id`, `since` (when it entered this status), `project` (the Substrate project of the pane, or null),
+`repo` (the work-log Project of its folder, or null), `ask` ([{question, header, multiSelect, options: [{label, description, preview}]}] or null),
+`ask_extras` ({context, attachments: [{id, kind, name, url, media_type, src}]} or null), `screen` ({text, options: [{label, keys, selected}]}
+when blocked at another dialog, or null), `last` ({turn_id, headline, text, question, ended_at}: its last turn's reply, or null).

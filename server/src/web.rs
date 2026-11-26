@@ -63,7 +63,7 @@ pub fn client_logo(client: &str) -> Option<&'static str> {
     }
 }
 
-fn logo(name: Option<&str>, alt: &str) -> Markup {
+pub(crate) fn logo(name: Option<&str>, alt: &str) -> Markup {
     html! { @if let Some(n) = name { img.logo src=(format!("/static/logos/{n}.svg")) alt=(alt) width="18" height="18"; } }
 }
 
@@ -151,6 +151,10 @@ pub(crate) fn ic(name: &str) -> Markup {
         "rotate" => r#"<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>"#,
         "upload" => r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>"#,
         "key" => r#"<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>"#,
+        "activity" => r#"<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>"#,
+        "search" => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
+        "eye-off" => r#"<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/>"#,
+        "download" => r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>"#,
         "send" => r#"<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>"#,
         _ => "",
     };
@@ -260,7 +264,7 @@ pub async fn project_bind(State(app): State<App>, headers: HeaderMap, User(a): U
 }
 
 /// The agent's state as a pill: free, working or needs you.
-fn status_tag(state: &str) -> Markup {
+pub(crate) fn status_tag(state: &str) -> Markup {
     let (cls, txt) = match state {
         "idle" | "done" => ("ok", "free"),
         "working" => ("blue", "working"),
@@ -290,6 +294,8 @@ fn section_of(title: &str) -> &'static str {
     match title {
         "Sessions" | "New session" | "Session created" => "/sessions",
         "Machines" => "/machines",
+        "Agents" => "/agents",
+        t if t == "Log" || t.starts_with("Log:") => "/log",
         "Audit log" => "/audit",
         "Settings" => "/profile",
         _ => "/",
@@ -328,7 +334,7 @@ pub fn layout(title: &str, acct: Option<&Account>, live: Option<String>, body: M
                             a.brand.on[cur == "/"] href="/" aria-current=[(cur == "/").then_some("page")] { img.mark src="/static/favicon.svg" width="22" height="22" alt=""; "Substrate" }
                             @if let Some(a) = acct {
                                 nav.links aria-label="Main" {
-                                    @for (href, label, icon) in [("/sessions", "Sessions", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
+                                    @for (href, label, icon) in [("/log", "Log", "activity"), ("/agents", "Agents", "terminal"), ("/sessions", "Sessions", "link"), ("/machines", "Machines", "monitor"), ("/audit", "Audit log", "list")] {
                                         a.on[cur == href] href=(href) aria-current=[(cur == href).then_some("page")] { @if cur == href { (ic(icon)) } (label) }
                                     }
                                 }
@@ -633,7 +639,7 @@ fn human_size(n: i64) -> String {
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub(crate) fn truncate(s: &str, n: usize) -> String {
     let one = s.replace('\n', " ");
     if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
 }

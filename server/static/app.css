@@ -477,3 +477,18 @@ dialog.confirm { border: 0; padding: 24px; width: min(420px, calc(100vw - 32px))
 dialog.confirm::backdrop { background: #0008; backdrop-filter: blur(4px); }
 dialog.confirm p { margin: 0 0 20px; line-height: 1.5; }
 dialog.confirm .row { justify-content: flex-end; gap: 8px; }
+
+/* Work log: token bars, diffs, search hits */
+.bars { display: flex; align-items: flex-end; gap: 4px; height: 140px; }
+.bars .bar { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; min-width: 0; }
+.bars .col { flex: 1; width: 100%; max-width: 28px; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px; overflow: hidden; background: var(--card-2); }
+.bars .bar > span { font-size: 11px; white-space: nowrap; }
+.bars .claude, .swatch.claude { background: #A98BFF; }
+.bars .codex, .swatch.codex { background: var(--teal); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+pre.diff { margin: 10px 0 0; background: var(--card-2); border-radius: 12px; padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55; overflow-x: auto; max-height: 520px; }
+pre.diff .add { color: var(--teal); }
+pre.diff .del { color: var(--red); }
+pre.diff .hunk { color: var(--muted); }
+details.diff-item { display: block; }
+mark { background: #A98BFF33; color: var(--text); border-radius: 3px; padding: 0 2px; }

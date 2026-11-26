@@ -1,6 +1,9 @@
 // Substrate's only script: live refresh, copy buttons, confirmations.
 // The pages work without it.
 
+// The work log draws days in the reader's time zone: tell the server the offset.
+try { document.cookie = "tz=" + -new Date().getTimezoneOffset() + "; path=/; max-age=31536000; samesite=lax"; } catch (e) {}
+
 // Live: a page with data-live="/path" listens for server-sent events and
 // reloads its <main> when something changes, unless the reader is typing.
 (function () {

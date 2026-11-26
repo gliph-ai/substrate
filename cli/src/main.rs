@@ -104,6 +104,36 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<GuardCmd>,
     },
+    /// The work log: each Claude Code and Codex turn, summarised on this Mac and sent to Substrate.
+    Log {
+        #[command(subcommand)]
+        cmd: LogCmd,
+    },
+    /// (Run by the agents) The work log hook: claude, codex or claude-ask.
+    #[command(hide = true)]
+    Hook { agent: String },
+}
+
+#[derive(Subcommand)]
+enum LogCmd {
+    /// Add the work log hooks to Claude Code and Codex. Your other hooks stay.
+    Install,
+    /// Remove only the work log hooks.
+    Uninstall,
+    /// Show the hooks, the upload queue, the summaries and the local store.
+    Status,
+    /// Import the turns of the transcripts on this Mac. Stats only, unless --summarize.
+    Backfill {
+        /// Also write a summary for each turn (it runs the agent's CLI on this Mac).
+        #[arg(long)]
+        summarize: bool,
+        /// With --summarize: only turns from this period, like 1d, 12h or 2w.
+        #[arg(long)]
+        since: Option<String>,
+        /// Also import Codex `exec` sessions (scripted runs, skipped by default).
+        #[arg(long)]
+        include_exec: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -244,6 +274,13 @@ async fn run() -> Result<()> {
         }
         return Ok(());
     }
+    if let Cmd::Hook { agent } = &cli.cmd {
+        // Inside the agent's turn: no network, no sign-in, never an error.
+        if let Ok(paths) = Paths::new(Paths::default_root()) {
+            substrate_cli::worklog::hook::run(&paths, agent);
+        }
+        return Ok(());
+    }
     let (paths, mut cfg, api) = setup()?;
     match cli.cmd {
         Cmd::Login { server, name } => {
@@ -294,6 +331,9 @@ async fn run() -> Result<()> {
                 }
                 if substrate_cli::guard::install_codex(&exe)? {
                     println!("The deploy guard is added for Codex. Approve it once in Codex under /hooks.");
+                }
+                if !substrate_cli::worklog::hook::state().iter().any(|s| s.1) {
+                    println!("To log and summarise each agent turn too: substrate log install");
                 }
             }
             DaemonCmd::Stop => {
@@ -452,7 +492,37 @@ async fn run() -> Result<()> {
             if substrate_cli::guard::install_codex(&exe)? { println!("It is added for Codex too (~/.codex/hooks.json). Open Codex and approve the new hook under /hooks once: Codex runs a hook only after you review it."); }
             else if substrate_cli::guard::installed_codex() { println!("It is already added for Codex."); }
         }
-        Cmd::Guard { cmd: None } => unreachable!("handled before sign-in"),
+        Cmd::Guard { cmd: None } | Cmd::Hook { .. } => unreachable!("handled before sign-in"),
+        Cmd::Log { cmd } => {
+            use substrate_cli::worklog::{hook, worker};
+            match cmd {
+                LogCmd::Install => {
+                    let exe = std::env::current_exe()?.to_string_lossy().to_string();
+                    for l in hook::install(&exe)? {
+                        println!("{l}");
+                    }
+                    println!("Each finished turn now goes to the work log. The relay (substrate daemon install) uploads it and writes its summary.");
+                }
+                LogCmd::Uninstall => {
+                    for l in hook::uninstall()? {
+                        println!("{l}");
+                    }
+                }
+                LogCmd::Status => {
+                    for (agent, on) in hook::state() {
+                        println!("{agent} hook: {}", if on { "installed" } else { "not installed (substrate log install)" });
+                    }
+                    let (q, jobs, failed, bytes) = worker::counts(&paths);
+                    println!("upload queue: {q} batches{}", if q > 0 && !launchd::loaded() { " (the relay is not running: substrate daemon install)" } else { "" });
+                    println!("summaries: {jobs} waiting, {failed} failed");
+                    println!("local store: {:.1} MB (logs, diffs and images stay on this Mac)", bytes as f64 / 1e6);
+                }
+                LogCmd::Backfill { summarize, since, include_exec } => {
+                    let since = since.as_deref().map(hook::parse_since).transpose()?;
+                    println!("{}", hook::backfill(&paths, summarize, since, include_exec)?);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -509,6 +579,9 @@ async fn doctor(paths: &Paths, cfg: &Config, api: &Api) {
     println!("{} server: {}", ok(reach), cfg.server);
     println!("{} deploy guard: {}", ok(substrate_cli::guard::installed()), if substrate_cli::guard::installed() { "on in Claude Code" } else { "off (substrate guard install)" });
     println!("{} deploy guard for Codex: {}", ok(substrate_cli::guard::installed_codex()), if substrate_cli::guard::installed_codex() { "added (approve it once in Codex under /hooks)" } else { "not added (substrate guard install)" });
+    for (agent, on) in substrate_cli::worklog::hook::state() {
+        println!("{} work log hook for {agent}: {}", ok(on), if on { "installed" } else { "not installed (substrate log install)" });
+    }
     if creds.is_some() {
         let me = api.call("GET", "/relay/api/whoami", None).await;
         println!("{} account: {}", ok(me.is_ok()), match &me { Ok(v) => format!("{} on {}", v["account"].as_str().unwrap_or(""), v["machine"].as_str().unwrap_or("")), Err(e) => e.to_string() });

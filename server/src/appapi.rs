@@ -86,7 +86,7 @@ pub async fn auth_verify(State(app): State<App>, Json(r): Json<VerifyReq>) -> Re
 }
 
 /// The account behind an app token.
-async fn bearer(app: &AppInner, headers: &HeaderMap) -> Result<String, Fail> {
+pub(crate) async fn bearer(app: &AppInner, headers: &HeaderMap) -> Result<String, Fail> {
     let t = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("").trim().to_string();
     sqlx::query_scalar::<_, String>("SELECT account_id FROM tokens WHERE hash=$1 AND kind='app' AND expires_at > now()")
         .bind(hash(&t)).fetch_optional(&app.db).await?.ok_or_else(|| Fail::new(401, "Sign in again."))
@@ -110,7 +110,7 @@ pub async fn me(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value
     Ok(Json(me_json(&app, &aid).await?))
 }
 
-fn project_json(app: &AppInner, p: &Project) -> Value {
+pub(crate) fn project_json(app: &AppInner, p: &Project) -> Value {
     json!({"id": p.id, "name": p.name, "handle": p.handle, "agent": crate::relay::agent_label(&p.agent), "state": p.state,
         "icon_url": if p.icon_etag.is_empty() { Value::Null } else { json!(format!("{}/projects/{}/icon?v={}", app.cfg.public_url, p.id, p.icon_etag)) }})
 }

@@ -80,9 +80,11 @@ Daemon → cloud:
 | `status` | `project_id`, `state` (`idle|working|blocked|done|unknown|offline|needs_rebind`) | endpoint state |
 | `ack` | `delivery_id`, `stage` (`accepted|submitted|working|uncertain|failed|agent_idle`), `detail?` | delivery progress |
 | `excerpt` | `message_id`, `text` | a short terminal excerpt for the developer only; testers never get it |
+| `response` | `req_id`, `status`, `body` | the answer to a `request` (HTTP-like status; `body.error` on an error) |
 
-`Pane` = `{"pane_id","agent","agent_session","status","cwd","title"}`, copied
-from `herdr agent list` (`agent_session` = `.agent_session.value`).
+`Pane` = `{"pane_id","agent","agent_session","status","cwd","title","workspace","live?"}`, copied
+from `herdr agent list` (`agent_session` = `.agent_session.value`). `live` (0.1.17) is set only while the
+agent is blocked: its AskUserQuestion (`ask`, `context`, `files`) or else its dialog screen (`screen`, `options`).
 
 Cloud → daemon:
 
@@ -92,6 +94,7 @@ Cloud → daemon:
 | `bindings` | `projects:[Binding]` | a change to a binding |
 | `deliver` | `delivery_id`, `message_id`, `project_id`, `envelope`, `reply_token`, `attachments:[{name,url,size,sha256}]` | one message to deliver |
 | `cancel` | `delivery_id` | the developer cancelled before the submit |
+| `request` | `req_id`, `op`, `args` | something only the relay has or can do (0.1.17, `proto::LOG_OPS`): `turn_local`, `turn_image`, `ask_file`, `agent_keys`, `agent_prompt`, `resummarize`, `retry_failed`. The cloud waits 8 to 30 s; a relay that drops the frame ends in "update the relay". |
 
 `Binding` = `{"project_id","handle","pane_id","agent_session","cwd"}`.
 
@@ -151,6 +154,25 @@ For each report, the cloud:
 4. After 45 minutes with no report, the daemon reports `unknown`.
 
 The cloud gets no GitHub, GitLab or Pushleft credentials.
+
+## Work log and live agents (0.1.17)
+
+Ported from Theasa, which this replaces. The relay's Stop hooks (Claude Code and Codex) read each finished turn from the
+agent's transcript on the Mac and upload it, grouped by git repo (`log_repos`; not a Herdr pane, so it outlives the pane):
+
+| Call (machine bearer) | Body | Answer |
+|---|---|---|
+| `POST /relay/log/turns` | `proto::LogBatch` `{repo, turns}` (200 turns at most) | `{"stored","updated"}`. A turn is new, or updated when its `ended_at` or `model_calls` grew. |
+| `POST /relay/log/summary` | `proto::LogSummaryReport` | `{"ok": true}`. `queued`, `running`, `failed`, or `done` with the summary. A redo keeps the state of an identical watch item or decision. |
+| `POST /relay/log/icon` | `{"key","mime","data"}` (base64, PNG, JPEG or WebP, 1 MB) | `{"updated"}`; never over an icon the developer uploaded |
+
+What stays on the Mac: the raw tool log, the diffs and the images. The cloud asks the recording Mac's relay for them
+(`request` `turn_local`, `turn_image`) when the developer opens a turn, and shows nothing of them when that Mac is offline.
+The summary is written on the Mac too, with the agent's own CLI. The cloud prices each turn from LiteLLM's public price table (loaded at boot and daily).
+
+Live agents: the owner can answer a blocked agent from the web or Sidra. `agent_keys` sends dialog keys only (`proto::AGENT_KEYS`);
+`agent_prompt` types a prompt (after cancelling an open AskUserQuestion). Both are owner-only and audited (`agent.keys`, `agent.prompt`).
+This is the one place where the relay types something that is not an approved message.
 
 ## MCP
 

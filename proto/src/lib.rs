@@ -32,6 +32,70 @@ pub struct Pane {
     /// The Herdr workspace label the pane sits in ("pushleft", "Tuli").
     #[serde(default)]
     pub workspace: String,
+    /// Only while the agent is blocked: what it asks. A relay before 0.1.17 never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<LiveView>,
+}
+
+/// What a blocked agent shows: its AskUserQuestion (from the `claude-ask` hook or the
+/// transcript), or else the dialog on its screen with the keys that pick each choice.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LiveView {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<AskQuestion>,
+    /// The agent's text before it asked (the end of it, redacted).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub context: String,
+    /// What it showed before it asked. Image bytes stay on the Mac: fetch with op `ask_file`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<AskFile>,
+    /// The last lines of the pane when there is no AskUserQuestion (redacted).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub screen: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ScreenOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AskQuestion {
+    pub question: String,
+    #[serde(default)]
+    pub header: String,
+    #[serde(default, rename = "multiSelect")]
+    pub multi_select: bool,
+    #[serde(default)]
+    pub options: Vec<AskOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AskOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AskFile {
+    /// sent | artifact
+    pub kind: String,
+    pub name: String,
+    /// claude.ai artifact links only.
+    #[serde(default)]
+    pub url: String,
+    /// Set when the relay holds a raster image for it (png, jpeg, gif, webp).
+    #[serde(default)]
+    pub media_type: String,
+}
+
+/// One choice on a dialog screen and the keys that pick it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ScreenOption {
+    pub label: String,
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub selected: bool,
 }
 
 /// A project bound to a pane on this machine.
@@ -73,6 +137,9 @@ pub enum DaemonFrame {
         detail: String,
     },
     Excerpt { message_id: String, text: String },
+    /// The answer to a cloud `request`. `status` is HTTP-like: 200, 400, 404, 409, 502.
+    /// On an error, `body` is `{"error": "<text to show>"}`.
+    Response { req_id: String, status: u16, body: serde_json::Value },
 }
 
 /// cloud → daemon
@@ -103,6 +170,198 @@ pub enum CloudFrame {
     },
     Cancel { delivery_id: String },
     Error { message: String },
+    /// Something only the relay has or can do. A relay before 0.1.17 drops it; the
+    /// cloud times out and says to update the relay. Ops (`LOG_OPS`):
+    /// - `turn_local` `{turn}`: the turn's local part, `{"log","diffs":{path:text},"images":[{name,media_type}]}`
+    /// - `turn_image` `{turn, index}`: `{"media_type","data"}` (base64) of `images[index]`
+    /// - `ask_file` `{pane_id, index}`: `{"media_type","data"}` of the pane's `live.files[index]`
+    /// - `agent_keys` `{pane_id, keys:[..]}`: keys into a dialog (1 to 10 of `AGENT_KEYS`)
+    /// - `agent_prompt` `{pane_id, text}`: a prompt; an open AskUserQuestion is cancelled first
+    /// - `resummarize` `{turn}`: write the turn's summary again
+    /// - `retry_failed` `{}`: queue every failed summary again
+    ///
+    /// `turn` is a [`TurnRef`].
+    Request { req_id: String, op: String, #[serde(default)] args: serde_json::Value },
+}
+
+pub const LOG_OPS: &[&str] = &["turn_local", "turn_image", "ask_file", "agent_keys", "agent_prompt", "resummarize", "retry_failed"];
+
+/// The keys `agent_keys` may send.
+pub const AGENT_KEYS: &[&str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "esc", "enter", "up", "down", "left", "right", "tab", "space", "y", "n"];
+
+// ---------- Work log: the turns of Claude Code and Codex, summarised on the Mac ----------
+//
+// The relay's Stop hooks read each finished turn from the agent's transcript. The relay
+// uploads the turn with `POST /relay/log/turns` ([`LogBatch`]) and keeps the raw tool log,
+// the diffs and the images on the Mac (they come to the cloud only on a `request`).
+// It writes the summary on the Mac with the agent's own CLI and sends it with
+// `POST /relay/log/summary` ([`LogSummaryReport`]). A repo's logo goes to
+// `POST /relay/log/icon` `{"key","mime","data"}` (base64, 1 MB at most).
+
+/// What names one turn everywhere: unique per account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+pub struct TurnRef {
+    /// claude | codex
+    pub agent: String,
+    pub session_id: String,
+    pub turn_key: String,
+}
+
+/// A git repo (its normalised remote, else its main worktree path), not a Herdr pane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LogRepo {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub root: String,
+    #[serde(default)]
+    pub remote: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub head: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub struct Tokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FileChange {
+    pub path: String,
+    pub add: u64,
+    pub del: u64,
+}
+
+/// in: what the user attached to the prompt. out: what the agent handed back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LogAttachment {
+    /// in | out
+    pub dir: String,
+    /// image | file | document | artifact | sent
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub media_type: String,
+    #[serde(default = "one")]
+    pub count: u32,
+    /// The relay holds the image: `images[image]` of op `turn_local`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<u32>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+/// One finished turn, as uploaded. Prompt and final text are redacted on the Mac.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LogTurn {
+    #[serde(flatten)]
+    pub id: TurnRef,
+    pub started_at: String,
+    pub ended_at: String,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub tool_ms: u64,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub final_text: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub tokens: Tokens,
+    #[serde(default)]
+    pub model_calls: u32,
+    #[serde(default)]
+    pub tools: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    pub files: Vec<FileChange>,
+    #[serde(default)]
+    pub attachments: Vec<LogAttachment>,
+    #[serde(default)]
+    pub cwd: String,
+    /// queued: the relay writes a summary. skipped: imported stats only (backfill without --summarize).
+    #[serde(default)]
+    pub summary_status: String,
+}
+
+/// `POST /relay/log/turns`. The answer: `{"stored","updated"}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LogBatch {
+    pub repo: LogRepo,
+    pub turns: Vec<LogTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Summary {
+    pub headline: String,
+    #[serde(default)]
+    pub summary: Vec<String>,
+    /// clean | watch | broken
+    pub verdict: String,
+    #[serde(default)]
+    pub steps: Vec<Step>,
+    #[serde(default)]
+    pub decisions: Vec<Decision>,
+    #[serde(default)]
+    pub watch: Vec<Watch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Step {
+    /// "+m:ss" from the prompt.
+    pub at: String,
+    pub title: String,
+    #[serde(default)]
+    pub text: String,
+    /// neutral | good | problem
+    pub tone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Decision {
+    pub text: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub alternative: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Watch {
+    pub text: String,
+    /// high | medium | low
+    pub impact: String,
+}
+
+/// `POST /relay/log/summary`: a summary job's state for one turn. The cloud keeps
+/// the done or dismissed state of an identical watch item or decision on a redo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LogSummaryReport {
+    #[serde(flatten)]
+    pub turn: TurnRef,
+    /// queued | running | done | failed
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Summary>,
+    /// The summariser's own model and usage (done only).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(default)]
+    pub tokens: Tokens,
+    /// What the summariser's CLI reported, when it reports a cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -78,6 +78,8 @@ struct Inner {
     state_sent: HashMap<String, String>,
     queue: HashMap<String, VecDeque<String>>,
     last_poll: Option<Instant>,
+    /// Each pane's state at the last poll: a question goes once its pane leaves blocked.
+    live_prev: HashMap<String, String>,
 }
 
 pub struct Relay {
@@ -86,6 +88,7 @@ pub struct Relay {
     fetch: Arc<dyn Fetch>,
     inner: Mutex<Inner>,
     out: Mutex<Option<mpsc::UnboundedSender<DaemonFrame>>>,
+    worker: Mutex<Option<Arc<crate::worklog::worker::Worker>>>,
 }
 
 fn now_s() -> i64 {
@@ -94,7 +97,7 @@ fn now_s() -> i64 {
 
 impl Relay {
     pub fn new(paths: Paths, herdr: Arc<dyn Herdr>, fetch: Arc<dyn Fetch>) -> Arc<Relay> {
-        let r = Arc::new(Relay { paths, herdr, fetch, inner: Mutex::new(Inner::default()), out: Mutex::new(None) });
+        let r = Arc::new(Relay { paths, herdr, fetch, inner: Mutex::new(Inner::default()), out: Mutex::new(None), worker: Mutex::new(None) });
         r.load_records();
         r
     }
@@ -144,6 +147,11 @@ impl Relay {
         *self.out.lock().unwrap() = tx;
     }
 
+    /// The work log's summary worker, for the cloud's `resummarize` and `retry_failed`.
+    pub fn set_worker(&self, w: Arc<crate::worklog::worker::Worker>) {
+        *self.worker.lock().unwrap() = Some(w);
+    }
+
     /// Make the next tick ask Herdr again instead of using the last answer.
     pub fn poll_now(&self) {
         self.inner.lock().unwrap().last_poll = None;
@@ -190,7 +198,7 @@ impl Relay {
             .filter_map(|e| std::fs::read(e.path()).ok()).filter_map(|b| serde_json::from_slice::<Record>(&b).ok()).collect()
     }
 
-    pub fn on_frame(&self, f: CloudFrame) {
+    pub fn on_frame(self: &Arc<Self>, f: CloudFrame) {
         match f {
             CloudFrame::Welcome { projects, .. } | CloudFrame::Bindings { projects } => {
                 let mut inner = self.inner.lock().unwrap();
@@ -250,7 +258,46 @@ impl Relay {
                 }
             }
             CloudFrame::Error { message } => log(&self.paths, "warn", "server said", json!({"message": message})),
+            CloudFrame::Request { req_id, op, args } => {
+                // Off the frame loop: Herdr and the disk can be slow.
+                let me = self.clone();
+                tokio::spawn(async move {
+                    let (status, body) = me.request(&op, &args).await;
+                    me.send(DaemonFrame::Response { req_id, status, body });
+                });
+            }
         }
+    }
+
+    /// One of the cloud's `request` ops (proto::LOG_OPS).
+    pub async fn request(&self, op: &str, args: &serde_json::Value) -> (u16, serde_json::Value) {
+        use crate::worklog::{live, worker};
+        let pane = self.inner.lock().unwrap().panes.iter().find(|p| p.pane_id == args["pane_id"].as_str().unwrap_or("")).cloned();
+        let turn: Option<proto::TurnRef> = serde_json::from_value(args["turn"].clone()).ok();
+        let index = args["index"].as_u64().map(|i| i as usize);
+        let bad = |what: &str| (400, json!({"error": format!("{op} needs {what}")}));
+        let (paths, herdr) = (self.paths.clone(), self.herdr.clone());
+        let blocking = |f: Box<dyn FnOnce() -> (u16, serde_json::Value) + Send>| async move {
+            tokio::task::spawn_blocking(f).await.unwrap_or_else(|e| (502, json!({"error": e.to_string()})))
+        };
+        let r = match op {
+            "turn_local" => match turn { Some(t) => worker::turn_local(&paths, &t), None => bad("turn") },
+            "turn_image" => match (turn, index) { (Some(t), Some(i)) => worker::turn_image(&paths, &t, i), _ => bad("turn and index") },
+            "ask_file" => match index { Some(i) => live::ask_file(&paths, pane.as_ref(), i), None => bad("pane_id and index") },
+            "agent_keys" => { let a = args.clone(); blocking(Box::new(move || live::keys(&*herdr, pane.as_ref(), &a))).await }
+            "agent_prompt" => { let a = args.clone(); blocking(Box::new(move || live::prompt(&paths, &*herdr, pane.as_ref(), &a))).await }
+            "resummarize" | "retry_failed" => match (self.worker.lock().unwrap().clone(), turn) {
+                (None, _) => (503, json!({"error": "the work log does not run in this relay"})),
+                (Some(w), _) if op == "retry_failed" => w.retry_failed(),
+                (Some(w), Some(t)) => w.resummarize(&t),
+                _ => bad("turn"),
+            },
+            _ => (400, json!({"error": format!("unknown op {op}; update the relay")})),
+        };
+        if op.starts_with("agent_") {
+            self.poll_now();
+        }
+        r
     }
 
     fn pane_state(b: &Binding, panes: &[Pane]) -> (String, Option<Pane>) {
@@ -269,8 +316,11 @@ impl Relay {
         let poll_due = self.inner.lock().unwrap().last_poll.map(|t| t.elapsed() >= Duration::from_secs(2)).unwrap_or(true);
         if poll_due {
             match self.herdr.list() {
-                Ok(panes) => {
+                Ok(mut panes) => {
+                    let mut prev = std::mem::take(&mut self.inner.lock().unwrap().live_prev);
+                    crate::worklog::live::enrich(&self.paths, &*self.herdr, &mut panes, &mut prev);
                     let mut inner = self.inner.lock().unwrap();
+                    inner.live_prev = prev;
                     inner.panes = panes.clone();
                     inner.last_poll = Some(Instant::now());
                     if inner.panes_sent.as_ref() != Some(&panes) {
@@ -530,6 +580,9 @@ pub async fn run(relay: Arc<Relay>, api: Arc<crate::api::Api>) -> Result<()> {
     let ws_url = format!("{}/relay/ws", api.server.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
     let deploy = crate::deploy::Watcher::new(relay.paths.clone(), api.clone());
     tokio::spawn(async move { deploy.run().await });
+    let worklog = crate::worklog::worker::Worker::new(relay.paths.clone(), api.clone());
+    relay.set_worker(worklog.clone());
+    tokio::spawn(worklog.run());
     // An automatic project has no logo yet: find it in the bound folder,
     // One try per project per run.
     let (r2, a2) = (relay.clone(), api.clone());

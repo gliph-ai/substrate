@@ -8,3 +8,4 @@ pub mod guard;
 pub mod herdr;
 pub mod icon;
 pub mod launchd;
+pub mod worklog;

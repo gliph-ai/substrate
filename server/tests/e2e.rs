@@ -1010,3 +1010,130 @@ async fn followups_in_an_approved_conversation_go_on_with_a_fit_check() {
     assert_eq!(m3, fid);
     assert!(!env3.contains("substrate hold"), "{env3}");
 }
+
+/// The next request the cloud sends the relay, skipping binding updates.
+async fn request(ws: &mut Ws) -> (String, String, Value) {
+    loop {
+        match next(ws).await {
+            CloudFrame::Request { req_id, op, args } => return (req_id, op, args),
+            CloudFrame::Bindings { .. } => continue,
+            f => panic!("expected a request, got {f:?}"),
+        }
+    }
+}
+
+/// The work log: the relay uploads turns and summaries, the app reads them, the cloud
+/// asks the relay for what stays on the Mac, and live agents take the owner's keys.
+#[tokio::test]
+async fn work_log_and_live_agents() {
+    use substrate_proto::{AskQuestion, Decision, LiveView, LogBatch, LogRepo, LogSummaryReport, LogTurn, Summary, Tokens, TurnRef, Watch};
+    let t = setup().await;
+    let dev = t.browser("dev@example.com").await;
+    let tok = t.pair(&dev).await;
+    let mut blocked = pane("w1:p1", "s1", "blocked");
+    blocked.live = Some(LiveView { ask: vec![AskQuestion { question: "Which database?".into(), ..Default::default() }], context: "I compared both.".into(), ..Default::default() });
+    let mut ws = t.ws(&tok, vec![blocked]).await;
+    let machine: String = sqlx::query_scalar("SELECT id FROM machines WHERE account_id=$1").bind(&dev.account).fetch_one(&t.app.db).await.unwrap();
+
+    let turn = |key: &str, calls: u32| LogTurn {
+        id: TurnRef { agent: "claude".into(), session_id: "s1".into(), turn_key: key.into() },
+        started_at: chrono::Utc::now().to_rfc3339(), ended_at: chrono::Utc::now().to_rfc3339(), duration_ms: 90_000,
+        prompt: "Fix the export button".into(), final_text: "Fixed it. Shall I deploy?".into(), model: "claude-opus-4".into(),
+        tokens: Tokens { input: 100, output: 200, cache_read: 300, cache_write: 0 }, model_calls: calls,
+        files: vec![substrate_proto::FileChange { path: "src/export.rs".into(), add: 3, del: 1 }], cwd: "/work/verna".into(),
+        summary_status: "queued".into(), ..Default::default()
+    };
+    let repo = LogRepo { key: "github.com/acme/verna".into(), name: "verna".into(), root: "/work/verna".into(), ..Default::default() };
+    let batch = LogBatch { repo: repo.clone(), turns: vec![turn("u1", 3), turn("u2", 1)] };
+    let (st, r) = t.relay_api(&tok, "POST", "/relay/log/turns", serde_json::to_value(&batch).unwrap()).await;
+    assert_eq!((st, r["stored"].as_i64()), (200, Some(2)), "{r}");
+    let (_, r) = t.relay_api(&tok, "POST", "/relay/log/turns", serde_json::to_value(&batch).unwrap()).await;
+    assert_eq!((r["stored"].as_i64(), r["updated"].as_i64()), (Some(0), Some(0)), "a repeat changes nothing");
+    let (_, r) = t.relay_api(&tok, "POST", "/relay/log/turns", serde_json::to_value(LogBatch { repo, turns: vec![turn("u1", 5)] }).unwrap()).await;
+    assert_eq!(r["updated"], 1, "a turn that went on is updated");
+    let summary = LogSummaryReport { turn: TurnRef { agent: "claude".into(), session_id: "s1".into(), turn_key: "u1".into() }, status: "done".into(),
+        summary: Some(Summary { headline: "The export button works again".into(), summary: vec!["The export button works again.".into()], verdict: "clean".into(),
+            decisions: vec![Decision { text: "Use a CSV stream".into(), why: "large files".into(), ..Default::default() }],
+            watch: vec![Watch { text: "Retest on Safari".into(), impact: "medium".into() }], ..Default::default() }),
+        model: "claude-haiku-4-5".into(), ..Default::default() };
+    let (st, r) = t.relay_api(&tok, "POST", "/relay/log/summary", serde_json::to_value(&summary).unwrap()).await;
+    assert_eq!(st, 200, "{r}");
+
+    // The app reads it with an app token.
+    let app_tok = substrate_server::app::token();
+    sqlx::query("INSERT INTO tokens (hash, kind, account_id, expires_at) VALUES ($1,'app',$2, now() + interval '1 day')")
+        .bind(substrate_server::app::hash(&app_tok)).bind(&dev.account).execute(&t.app.db).await.unwrap();
+    let api = |p: &str| format!("{}/api/v1{p}", t.base);
+    let get = |p: String, tk: String| { let http = t.http.clone(); async move { let r = http.get(p).bearer_auth(tk).send().await.unwrap(); (r.status().as_u16(), r.json::<Value>().await.unwrap_or(json!({}))) } };
+    let (_, p) = get(api("/log/pulse?range=week&tz=60"), app_tok.clone()).await;
+    assert_eq!(p["totals"]["turns"], 2, "{p}");
+    assert_eq!(p["attention"][0]["text"], "Retest on Safari");
+    assert!(p["verdict"].is_null() && p["days"][0]["items"][0]["bullets"][0]["text"] == "The export button works again", "{p}");
+    let rid = p["days"][0]["items"][0]["project"]["id"].as_i64().unwrap();
+    let (_, d) = get(api(&format!("/log/repos/{rid}?only=notes")), app_tok.clone()).await;
+    assert_eq!(d["turns"].as_array().unwrap().len(), 1, "only the turn with notes: {d}");
+    let tid = d["turns"][0]["id"].as_i64().unwrap();
+    let (_, s) = get(api("/log/search?q=expor"), app_tok.clone()).await;
+    assert!(s.as_array().unwrap().iter().any(|x| x["id"] == tid), "{s}");
+    let wid = p["attention"][0]["id"].as_i64().unwrap();
+    assert_eq!(t.http.post(api(&format!("/log/watch/{wid}/done"))).bearer_auth(&app_tok).send().await.unwrap().status(), 200);
+    // A redo keeps the item done.
+    t.relay_api(&tok, "POST", "/relay/log/summary", serde_json::to_value(&summary).unwrap()).await;
+    let st: String = sqlx::query_scalar("SELECT status FROM log_watch WHERE turn_id=$1").bind(tid).fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(st, "done");
+
+    // The turn: the diffs come from the relay.
+    let (h, tk) = (t.http.clone(), app_tok.clone());
+    let url = api(&format!("/log/turns/{tid}"));
+    let pending = tokio::spawn(async move { h.get(url).bearer_auth(tk).send().await.unwrap().json::<Value>().await.unwrap() });
+    let (req_id, op, args) = request(&mut ws).await;
+    assert_eq!((op.as_str(), args["turn"]["turn_key"].as_str()), ("turn_local", Some("u1")));
+    send(&mut ws, DaemonFrame::Response { req_id, status: 200, body: json!({"log": "+0:01 Edit: src/export.rs", "diffs": {"src/export.rs": "@@ -1 +1 @@\n-a\n+b"}, "images": []}) }).await;
+    let d = pending.await.unwrap();
+    assert_eq!(d["turn"]["diffs"]["src/export.rs"], "@@ -1 +1 @@\n-a\n+b", "{d}");
+    assert!(d["local_error"].is_null());
+    assert_eq!(d["decisions"][0]["text"], "Use a CSV stream");
+
+    // Live agents: the question shows, and keys go to the relay, audited.
+    let (_, ag) = get(api("/agents"), app_tok.clone()).await;
+    assert_eq!(ag["agents"][0]["ask"][0]["question"], "Which database?", "{ag}");
+    let (h, tk) = (t.http.clone(), app_tok.clone());
+    let url = api(&format!("/agents/{machine}/w1:p1/keys"));
+    let pending = tokio::spawn(async move { h.post(url).bearer_auth(tk).json(&json!({"keys": ["1"]})).send().await.unwrap().status().as_u16() });
+    let (req_id, op, args) = request(&mut ws).await;
+    assert_eq!((op.as_str(), args["keys"][0].as_str()), ("agent_keys", Some("1")));
+    send(&mut ws, DaemonFrame::Response { req_id, status: 200, body: json!({"ok": true}) }).await;
+    assert_eq!(pending.await.unwrap(), 200);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE action='agent.keys'").fetch_one(&t.app.db).await.unwrap();
+    assert_eq!(n, 1);
+    let bad = t.http.post(api(&format!("/agents/{machine}/w1:p1/keys"))).bearer_auth(&app_tok).json(&json!({"keys": ["rm -rf"]})).send().await.unwrap();
+    assert_eq!(bad.status(), 400, "only dialog keys");
+
+    // Another account sees none of it.
+    let other = t.browser("eve@example.com").await;
+    let other_tok = substrate_server::app::token();
+    sqlx::query("INSERT INTO tokens (hash, kind, account_id, expires_at) VALUES ($1,'app',$2, now() + interval '1 day')")
+        .bind(substrate_server::app::hash(&other_tok)).bind(&other.account).execute(&t.app.db).await.unwrap();
+    assert_eq!(get(api(&format!("/log/turns/{tid}")), other_tok.clone()).await.0, 404);
+    assert_eq!(get(api(&format!("/log/repos/{rid}")), other_tok.clone()).await.0, 404);
+    assert_eq!(get(api("/log/pulse"), other_tok.clone()).await.1["totals"]["turns"], 0);
+    assert_eq!(t.http.post(api(&format!("/agents/{machine}/w1:p1/keys"))).bearer_auth(&other_tok).json(&json!({"keys": ["1"]})).send().await.unwrap().status(), 404);
+    assert_eq!(t.http.post(api(&format!("/log/watch/{wid}/open"))).bearer_auth(&other_tok).send().await.unwrap().status(), 404);
+
+    // The web pages, with the Mac offline: the turn says where its diffs are.
+    drop(ws);
+    for _ in 0..100 {
+        if !t.app.machine_online(&machine) { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    for path in ["/log".to_string(), format!("/log/repos/{rid}"), format!("/log/turns/{tid}"), "/log/search?q=export".into(), "/agents".into()] {
+        let r = t.http.get(format!("{}{path}", t.base)).header("cookie", format!("{}; tz=60", dev.cookie)).send().await.unwrap();
+        assert_eq!(r.status(), 200, "{path}");
+        let body = r.text().await.unwrap();
+        if path.starts_with("/log/turns") {
+            assert!(body.contains("is offline") && body.contains("Retest on Safari"), "{body}");
+        }
+    }
+    let r = t.http.get(format!("{}/log/turns/{tid}", t.base)).header("cookie", &other.cookie).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+}
