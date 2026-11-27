@@ -56,23 +56,18 @@ jobs:
   publish:
     needs: [check, build]
     runs-on: ubuntu-latest
-    environment: prod
+    environment: production
     permissions:
       contents: write
     env:
       V: ${{ needs.check.outputs.version }}
-      PL_VERSION: 0.1.0-6e5dc8d
-      PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
       PUSHLEFT_TOKEN: ${{ secrets.PUSHLEFT_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with: { name: substrate, path: dist/substrate }
-      - run: |
-          sudo curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
-          echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
-          sudo chmod +x /usr/local/bin/pl
+      - run: ci/install-pl.sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       # GitHub release first, the bucket's completion marker last; every step
       # overwrites, so a failed run is rerun from the top.
       - run: |

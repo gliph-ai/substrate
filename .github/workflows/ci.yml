@@ -1,14 +1,25 @@
-# Every push is tested; main deploys to Pushleft (org gliph, project substrate)
-# from .pl.yaml. Needs the repository secret PUSHLEFT_TOKEN (a gliph service
-# token; it names its org, so `pl` gets no --org).
+# Pushleft CI standard (docs: pushleft ci-pipelines). Every push runs the fast
+# Rust tests. On main, build:production builds and holds the release next to
+# the tests; deploy:production makes that commit live once they pass.
+# PUSHLEFT_TOKEN: admin service token of org gliph, a secret of the
+# `production` environment (main only). A token names its org: no --org.
 name: ci
 
 on:
   push:
+    branches: ['**']   # branches only; tags belong to release.yml
   workflow_dispatch:
 
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  PL_GIT_BRANCH: ${{ github.ref_name }}
+
 jobs:
-  test:
+  test-rust:
+    name: test:rust
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -32,32 +43,28 @@ jobs:
       # The relay tests use a fake herdr; the server suite needs only Postgres.
       - run: cargo test -p substrate-proto -p substrate-server
 
-  deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main'
+  build-production:
+    name: build:production
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: production
     runs-on: ubuntu-latest
-    # One deploy at a time, and a newer push cancels a waiting older one, so an
-    # older run never rolls production back.
-    concurrency:
-      group: substrate-prod
-      cancel-in-progress: true
-    environment:
-      name: prod
-      url: https://substrate.gliph.sh
-    env:
-      PL_VERSION: 0.1.0-6e5dc8d
-      PL_SHA256: 5961f84d5bed6cacdbe4af41f36708a0ca0600e00ff4e0c6935c6ffadcfaa92a
-      PUSHLEFT_TOKEN: ${{ secrets.PUSHLEFT_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-      - name: Only the tip of main deploys
-        run: |
-          tip=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$tip" != "$GITHUB_SHA" ]; then echo "main is at $tip; not deploying $GITHUB_SHA"; echo "SKIP=1" >> "$GITHUB_ENV"; fi
-      - if: env.SKIP != '1'
-        run: |
-          sudo curl -fsSL -o /usr/local/bin/pl "https://releases.pushleft.dev/cli/$PL_VERSION/pl-linux-amd64"
-          echo "$PL_SHA256  /usr/local/bin/pl" | sha256sum -c -
-          sudo chmod +x /usr/local/bin/pl
-          pl up --production
-          curl -fsS https://substrate.gliph.sh/healthz
+      - run: ci/install-pl.sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: pl up --production --hold
+        env: { PUSHLEFT_TOKEN: "${{ secrets.PUSHLEFT_TOKEN }}" }
+
+  deploy-production:
+    name: deploy:production
+    needs: [build-production, test-rust]
+    concurrency: { group: pushleft-production }
+    environment:
+      name: production
+      url: https://substrate.gliph.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: ci/install-pl.sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: pl release --production --commit "$GITHUB_SHA"
+        env: { PUSHLEFT_TOKEN: "${{ secrets.PUSHLEFT_TOKEN }}" }
+      - run: curl -fsS https://substrate.gliph.sh/healthz
