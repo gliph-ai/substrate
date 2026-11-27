@@ -5,11 +5,11 @@
 | Item | Value |
 |---|---|
 | URL | https://substrate.gliph.sh (TLS 1.3 only) |
-| Platform | Pushleft, org `empire`, project `substrate`, role `web` (one instance, port 8080) |
+| Platform | Pushleft, org `gliph`, project `substrate`, role `web` (one instance, port 8080) |
 | Manifest | `.pl.yaml` at the repo root |
 | Database | Pushleft PostgreSQL (`data.postgres`, database `substrate`). Migrations (`server/migrations`) run at boot. |
 | Files | bucket `files`: `attachments/<id>`, and relay releases in `downloads/substrate/` |
-| DNS | Porkbun CNAME `substrate.gliph.sh` → `substrate--205eb939.apps.pushleft.dev` |
+| DNS | Porkbun CNAME `substrate.gliph.sh` → `substrate--64a9c3f0.apps.pushleft.dev` |
 | Secrets | `SUBSTRATE_SECRET`, `GLIPH_PLUGIN_TOKEN`, `SES_KEY_ID`, `SES_SECRET`, `S3_*`, `AWS_*`, `APNS_*`, `SENTRY_DSN` (in Pushleft secrets) |
 | Errors | Pushleft console, Observability › Errors (Sentry SDK in `server/src/main.rs`, 10% of requests traced) |
 | Mail | Amazon SES eu-west-1, from `noreply@substrate.gliph.sh` (the shared account; the subdomain sender makes mail clients show Substrate's icon, not Gliph's) |
@@ -24,7 +24,7 @@ Push to `main` on https://github.com/gliph-ai/substrate. `.github/workflows/ci.y
 To deploy by hand:
 
 ```sh
-pl --org empire up --production      # from the repo root
+pl --org gliph up --production      # from the repo root
 curl -s https://substrate.gliph.sh/healthz
 ```
 
@@ -37,9 +37,9 @@ After a deploy, the relays reconnect with a jittered backoff from 1 s to 60 s. M
 Deploy the last good commit again:
 
 ```sh
-pl --org empire list                                  # recent deployments
+pl --org gliph list                                  # recent deployments
 git worktree add /tmp/substrate-rb <good-sha>
-pl --org empire up --production --path /tmp/substrate-rb
+pl --org gliph up --production --path /tmp/substrate-rb
 git worktree remove /tmp/substrate-rb
 ```
 
@@ -53,12 +53,12 @@ cli/release.sh        # builds arm64 and x86_64, publishes to files:downloads/su
 
 ## Backups
 
-Pushleft backs up the managed Postgres. To restore into a new generation, use `pl --org empire db` (refer to docs/managed-databases.md in Pushleft). Attachments are in the bucket. When you delete a project, Substrate deletes its rows. You can delete its attachment objects by prefix.
+Pushleft backs up the managed Postgres. To restore into a new generation, use `pl --org gliph db` (refer to docs/managed-databases.md in Pushleft). Attachments are in the bucket. When you delete a project, Substrate deletes its rows. You can delete its attachment objects by prefix.
 
 ## Logs
 
 ```sh
-pl --org empire logs --production --role web -f
+pl --org gliph logs --production --role web -f
 ```
 
 The log has JSON lines. Useful fields: `msg`, `error`, `machine`. On each developer's Mac, the relay log is `~/Library/Application Support/substrate/logs/daemon.log`.

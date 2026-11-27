@@ -1,5 +1,5 @@
-# Every push is tested; main deploys to Pushleft (org empire, project substrate)
-# from .pl.yaml. Needs the repository secret PUSHLEFT_TOKEN (an empire service
+# Every push is tested; main deploys to Pushleft (org gliph, project substrate)
+# from .pl.yaml. Needs the repository secret PUSHLEFT_TOKEN (a gliph service
 # token; it names its org, so `pl` gets no --org).
 name: ci
 

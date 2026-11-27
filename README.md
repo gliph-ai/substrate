@@ -118,7 +118,7 @@ Each end-to-end test creates a new database on `SUBSTRATE_TEST_PG` (default `pos
 
 ## Ship
 
-- **Server:** push to `main`. GitHub Actions runs clippy and the tests, then `pl up --production` (Pushleft org `empire`, project `substrate`, `.pl.yaml`). Migrations run when the server starts.
+- **Server:** push to `main`. GitHub Actions runs clippy and the tests, then `pl up --production` (Pushleft org `gliph`, project `substrate`, `.pl.yaml`). Migrations run when the server starts.
 - **Relay:** run `cli/release.sh`. It builds both Mac architectures and puts them in the bucket behind `/install`. To update a relay, run the installer again, then `substrate daemon restart`.
 
 [Operations](docs/operations.md) has the manual deploy, rollback, backups, logs and the runbook.

@@ -1,5 +1,5 @@
-# Substrate on Pushleft (org empire, project substrate). Deploy from the repo
-# root: `pl --org empire up --production` (CI does the same on main).
+# Substrate on Pushleft (org gliph, project substrate). Deploy from the repo
+# root: `pl --org gliph up --production` (CI does the same on main).
 # DATABASE_URL comes from data.postgres; S3_*/AWS_* from the `files` bucket
 # (`pl storage bucket create files --production --set-secret`).
 version: 1

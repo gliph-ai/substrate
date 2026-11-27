@@ -23,7 +23,7 @@ if [ "${1:-}" != "--publish" ]; then
   [ "${1:-}" = "--build" ] && exit 0
 fi
 # A CI token names its own org; on a Mac the stored login needs --org.
-org="--org empire"; [ -n "${PUSHLEFT_TOKEN:-}" ] && org=""
+org="--org gliph"; [ -n "${PUSHLEFT_TOKEN:-}" ] && org=""
 # Versioned binaries first, then latest/ (latest.json, which the installer
 # reads to pick the versioned folder, after its binaries), and $v/latest.json
 # last as the marker the release workflow checks. A rerun overwrites the same
