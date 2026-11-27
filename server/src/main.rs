@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 use substrate_server::{app, build, domain, gliph, router};
 
 fn main() -> anyhow::Result<()> {
+    // Pin ring as the TLS provider: a dependency that adds aws-lc-rs would leave rustls undecided, and it panics on the first connection.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // Errors and request timings go to Pushleft's Errors page. Without SENTRY_DSN (local, tests) the SDK is off.
     // The environment comes from SENTRY_ENVIRONMENT, else "production" for a release build.
     let _sentry = sentry::init(sentry::ClientOptions::new().maybe_release(sentry::release_name!()).traces_sample_rate(0.1));
