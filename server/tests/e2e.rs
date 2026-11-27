@@ -1232,3 +1232,26 @@ async fn pushleft_admin_users_and_block() {
     assert_eq!(r["item"]["actions"], json!(["suspend"]));
     assert!(auth::upsert_account(&t.app, "dev@example.com").await.is_ok());
 }
+
+/// Two pumps of one project at once (a new message and a pane update) deliver its next message once.
+#[tokio::test]
+async fn concurrent_pumps_deliver_once() {
+    let t = setup().await;
+    let w = world(&t).await;
+    let mut ws = t.ws(&w.machine, vec![pane("w1:p1", "s1", "idle")]).await;
+    let owner_pat = oauth::create_pat(&t.app, &w.dev.account, "dev").await.unwrap();
+    t.mcp(&owner_pat, "send_message", json!({"project_id": w.pid, "text": "first"})).await;
+    let (_, first, _, _) = deliver(&mut ws).await;
+    t.mcp(&owner_pat, "send_message", json!({"project_id": w.pid, "text": "second"})).await;
+    t.mcp(&owner_pat, "send_message", json!({"project_id": w.pid, "text": "third"})).await;
+    quiet(&mut ws).await;
+    sqlx::query("UPDATE messages SET stage='completed' WHERE id=$1").bind(&first).execute(&t.app.db).await.unwrap();
+    for _ in 0..20 {
+        let (a, b) = tokio::join!(substrate_server::domain::pump(&t.app, &w.pid), substrate_server::domain::pump(&t.app, &w.pid));
+        a.unwrap();
+        b.unwrap();
+    }
+    let (_, second, _, _) = deliver(&mut ws).await;
+    assert_ne!(first, second);
+    quiet(&mut ws).await;
+}

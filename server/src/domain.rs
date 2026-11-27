@@ -600,8 +600,24 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     }
     let reply_token = token();
     let delivery = id("d");
-    sqlx::query("UPDATE messages SET stage='dispatched', delivery_id=$2, reply_hash=$3, agent_idle=false, updated_at=now() WHERE id=$1")
-        .bind(&m.id).bind(&delivery).bind(hash(&reply_token)).execute(&app.db).await?;
+    // Two pumps of one project can run at once (a new message and a pane update). The project's
+    // row lock orders them: the second sees the first one's delivery in flight and stops.
+    let mut tx = app.db.begin().await?;
+    sqlx::query("SELECT 1 FROM projects WHERE id=$1 FOR UPDATE").bind(pid).execute(&mut *tx).await?;
+    let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE project_id=$1 AND ((stage = ANY($2) AND NOT agent_idle) OR stage='reviewing')")
+        .bind(pid).bind(IN_FLIGHT).fetch_one(&mut *tx).await?;
+    let claimed = if busy > 0 { 0 } else {
+        sqlx::query("UPDATE messages SET stage='dispatched', delivery_id=$2, reply_hash=$3, agent_idle=false, updated_at=now() WHERE id=$1 AND stage='approved'")
+            .bind(&m.id).bind(&delivery).bind(hash(&reply_token)).execute(&mut *tx).await?.rows_affected()
+    };
+    tx.commit().await?;
+    if busy > 0 {
+        return Ok(());
+    }
+    if claimed == 0 {
+        // The message moved on meanwhile (cancelled, expired): try the next one.
+        return Box::pin(pump(app, pid)).await;
+    }
     let atts = sqlx::query_as::<_, Attachment>("SELECT * FROM attachments WHERE message_id=$1 AND origin='tester' ORDER BY created_at")
         .bind(&m.id).fetch_all(&app.db).await?;
     let attachments = atts.iter().map(|a| AttachmentRef {
@@ -617,7 +633,7 @@ pub async fn pump(app: &AppInner, pid: &str) -> Result<(), Fail> {
     });
     if !sent {
         // The socket closed between the check and the send: back to the queue.
-        sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE id=$1").bind(&m.id).execute(&app.db).await?;
+        sqlx::query("UPDATE messages SET stage='approved', delivery_id='' WHERE id=$1 AND delivery_id=$2").bind(&m.id).bind(&delivery).execute(&app.db).await?;
         return Ok(());
     }
     add_event(app, &m.conversation_id, &m.id, "relay", &p.handle, "stage", "Sent to the developer's relay.", json!({"message_id": m.id, "stage": "dispatched"}), false).await?;
