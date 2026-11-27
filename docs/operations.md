@@ -19,7 +19,7 @@ Run one web instance only. The relay hub and the long-poll wakeups are in proces
 
 ## Deploy
 
-Push to `main` on https://github.com/gliph-ai/substrate. `.github/workflows/ci.yml` runs clippy and the tests, then deploys with the repository secret `PUSHLEFT_TOKEN`. CI deploys only the commit at the tip of `main`.
+Push to `main` on https://github.com/gliph-ai/substrate. `.github/workflows/ci.yml` runs clippy and the tests next to a held production build (`pl up --production --hold`). When both pass, it releases that build (`pl release --production --commit <sha>`) and checks `/healthz`. A newer push cancels an older run. The token is `PUSHLEFT_TOKEN` in the GitHub environment `production`, for `main` only.
 
 To deploy by hand:
 
